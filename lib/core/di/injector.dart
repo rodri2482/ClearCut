@@ -783,6 +783,26 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   sl.registerSingleton<LnReaderExtensionService>(lnrService);
   sl.registerSingleton<LnReaderManager>(lnrManager);
   await lnrManager.init();
+  // ClearCut built-in novel source (Project Gutenberg, public domain). Stored
+  // like a user-installed LNReader plugin, refreshed from the bundled asset on
+  // every launch so app updates also update the source.
+  try {
+    await Hive.box<Map>(LnReaderExtensionService.boxName).put(
+      'clearcut_gutenberg',
+      {
+        'id': 'clearcut_gutenberg',
+        'name': 'Project Gutenberg (free books)',
+        'site': 'https://www.gutenberg.org',
+        'lang': 'English',
+        'version': '1.0.0',
+        'url': 'bundled://clearcut_gutenberg',
+        'iconUrl': 'https://www.gutenberg.org/gutenberg/pg-logo-129x80.png',
+        'js': await rootBundle.loadString('assets/builtin_sources/gutenberg.js'),
+      },
+    );
+  } catch (e) {
+    debugPrint('[builtin] Gutenberg source failed to load: $e');
+  }
   // Repo-URL box too, so Backup's sync build() can read it any time — the
   // novel twin of the mihon_repos/aniyomi_repos opens below. Unlike those
   // (opened inside a guarded, Android-only microtask), LNReader has no
@@ -856,6 +876,20 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   // legacy `bundled://` entries left by older installs, then load the
   // repo-installed providers persisted from previous launches.
   await registry.purgeBundled();
+  // ClearCut built-in sources: free, legal content that works out of the box.
+  // Re-seeded every launch (purgeBundled above clears bundled entries), and a
+  // failure here never blocks boot — the app simply starts without them.
+  try {
+    await registry.installFromBundled(
+      name: 'clearcut_archive',
+      jsSource: await rootBundle.loadString(
+        'assets/builtin_sources/archive_films.js',
+      ),
+      displayName: 'Internet Archive (free films)',
+    );
+  } catch (e) {
+    debugPrint('[builtin] Internet Archive source failed to load: $e');
+  }
   // Load repo-installed JS providers into the runtime. Bounded so a provider
   // whose JS HANGS (flutter_js can deadlock) can't trap the splash — the
   // reported "stuck on the splash for minutes":

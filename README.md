@@ -19,6 +19,10 @@ Stream and download anime episodes, anime movies, TV series and movies. A built-
 - **Anime, movies and series**: browse, search, track and play from one place.
 - **Watch ad-free**: the NoFlix web player opens any movie or show by its TMDB id. An AdGuard / EasyPrivacy ad blocker with a native engine removes ads, pop-ups, trackers and redirects.
 - **Downloads**: save episodes and movies (including HLS streams with subtitles) for offline viewing. Downloads keep running in the background.
+- **Built-in free sources** that work with no setup:
+  - **Internet Archive (free films)**: public-domain classics such as sci-fi and horror, comedy and the silent era, played straight from archive.org's MP4 files in up to 1080p.
+  - **Project Gutenberg (free books)**: over 70,000 public-domain books with covers, split into chapters, in the Novel reader. If gutenberg.org is down, they load from the official PGLAF mirror.
+- **Gestures in the ad-free player**: swipe left or right to seek, swipe up or down on the right for volume and on the left for brightness. The native player also has double-tap seek and pinch-to-zoom.
 - **Extensions**: add Aniyomi, CloudStream, Stremio and Mihon extension repositories from **Settings → Extensions**. ClearCut ships with no third-party repositories. You choose which ones to add.
 - **Manga and light novels**: separate reading modes with their own readers.
 - **Android TV**: a full remote-friendly interface.

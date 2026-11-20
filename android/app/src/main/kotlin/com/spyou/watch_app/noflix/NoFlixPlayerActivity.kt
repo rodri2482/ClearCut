@@ -96,6 +96,7 @@ class NoFlixPlayerActivity : ComponentActivity() {
 
     private lateinit var root: FrameLayout
     private lateinit var filter: AdFilter
+    private lateinit var gestures: PlayerGestures
     private var webView: WebView? = null
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
@@ -136,6 +137,8 @@ class NoFlixPlayerActivity : ComponentActivity() {
 
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         setContentView(root)
+        gestures = PlayerGestures(this) { webView }
+        gestures.attachHud()
 
         // An explicit episode from Zangetsu wins; otherwise a TV show resumes its last episode.
         val explicit = if (intent.hasExtra(EXTRA_SEASON)) {
@@ -189,6 +192,11 @@ class NoFlixPlayerActivity : ComponentActivity() {
             WebViewCompat.addDocumentStartJavaScript(
                 view, STREAM_DOCUMENT_START_SCRIPT, STREAM_ALLOWED_ORIGIN_RULES
             )
+            // Swipe-to-seek: the video is in a cross-origin iframe, so every frame
+            // gets a small postMessage listener that seeks its own <video>.
+            WebViewCompat.addDocumentStartJavaScript(
+                view, PlayerGestures.SEEK_FRAME_SCRIPT, PlayerGestures.ALL_FRAMES
+            )
         }
         // The page script posts its watch progress here; the site keeps the position itself,
         // so the app only needs the bridge to exist.
@@ -199,6 +207,7 @@ class NoFlixPlayerActivity : ComponentActivity() {
         }
         view.webChromeClient = ChromeClient()
         view.webViewClient = BlockingClient()
+        gestures.attach(view)
         root.addView(
             view,
             FrameLayout.LayoutParams(
@@ -290,6 +299,8 @@ class NoFlixPlayerActivity : ComponentActivity() {
             )
             customView = view
             customViewCallback = callback
+            gestures.attach(view)
+            gestures.bringHudToFront()
             updateOrientation()
         }
 

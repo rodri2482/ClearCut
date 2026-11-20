@@ -10,7 +10,15 @@ class Tmdb {
 
   static const String host = 'api.themoviedb.org';
   static const String base = 'https://$host/3';
-  static const String apiKey = 'fab792d6c5936a7332045ca4565c7353';
+  /// ClearCut: pass your own free TMDB key at build time with
+  /// `--dart-define=TMDB_API_KEY=...` (themoviedb.org → Settings → API).
+  /// The default is the key ClearCut inherited from upstream Zangetsu; replace
+  /// it with your own before publishing builds, since TMDB keys are issued
+  /// per application.
+  static const String apiKey = String.fromEnvironment(
+    'TMDB_API_KEY',
+    defaultValue: 'fab792d6c5936a7332045ca4565c7353',
+  );
 
   /// TMDB's other API address, for networks that block [host].
   ///

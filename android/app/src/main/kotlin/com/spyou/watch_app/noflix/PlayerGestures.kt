@@ -1,6 +1,5 @@
 package com.spyou.watch_app.noflix
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.graphics.Color
@@ -74,12 +73,13 @@ class PlayerGestures(private val activity: Activity, private val webView: () -> 
     /** Re-raises the HUD above a newly added full-screen view. */
     fun bringHudToFront() = hud.bringToFront()
 
-    @SuppressLint("ClickableViewAccessibility")
-    fun attach(target: View) {
-        target.setOnTouchListener { v, e -> onTouch(v, e) }
-    }
-
-    private fun onTouch(view: View, e: MotionEvent): Boolean {
+    /**
+     * Called from the activity's dispatchTouchEvent with EVERY touch, before any
+     * view sees it, so gestures also work over HTML5 full-screen video (whose
+     * own views would otherwise swallow the touches). Returns true when the
+     * gesture owns the event; [toPage] delivers a synthetic cancel to the page.
+     */
+    fun handle(e: MotionEvent, width: Int, height: Int, toPage: (MotionEvent) -> Unit): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 mode = IDLE
@@ -101,7 +101,7 @@ class PlayerGestures(private val activity: Activity, private val webView: () -> 
                     mode = when {
                         abs(dx) > abs(dy) * 1.5f -> SEEK
                         abs(dy) > abs(dx) * 1.5f ->
-                            if (downX > view.width / 2f) VOLUME else BRIGHTNESS
+                            if (downX > width / 2f) VOLUME else BRIGHTNESS
                         else -> PASS
                     }
                     if (mode == PASS) return false
@@ -110,21 +110,21 @@ class PlayerGestures(private val activity: Activity, private val webView: () -> 
                         BRIGHTNESS -> brightnessLevel()
                         else -> 0f
                     }
-                    cancelPageTouch(view, e)
+                    cancelPageTouch(e, toPage)
                 }
                 when (mode) {
                     SEEK -> {
-                        seekSeconds = ((dx / view.width.coerceAtLeast(1)) * MAX_SEEK_SECONDS)
+                        seekSeconds = ((dx / width.coerceAtLeast(1)) * MAX_SEEK_SECONDS)
                             .roundToInt()
                         show(if (seekSeconds >= 0) "⏩  +${seekSeconds}s" else "⏪  ${seekSeconds}s")
                     }
                     VOLUME -> {
-                        val level = (startLevel - dy / (view.height * 0.8f)).coerceIn(0f, 1f)
+                        val level = (startLevel - dy / (height.coerceAtLeast(1) * 0.8f)).coerceIn(0f, 1f)
                         setVolume(level)
                         show("🔊  ${(level * 100).roundToInt()}%")
                     }
                     BRIGHTNESS -> {
-                        val level = (startLevel - dy / (view.height * 0.8f)).coerceIn(0.01f, 1f)
+                        val level = (startLevel - dy / (height.coerceAtLeast(1) * 0.8f)).coerceIn(0.01f, 1f)
                         setBrightness(level)
                         show("☀  ${(level * 100).roundToInt()}%")
                     }
@@ -147,10 +147,10 @@ class PlayerGestures(private val activity: Activity, private val webView: () -> 
     }
 
     /** The page already saw ACTION_DOWN; end its touch so it doesn't act on the swipe. */
-    private fun cancelPageTouch(view: View, e: MotionEvent) {
+    private fun cancelPageTouch(e: MotionEvent, toPage: (MotionEvent) -> Unit) {
         val now = SystemClock.uptimeMillis()
         val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, e.x, e.y, 0)
-        view.onTouchEvent(cancel)
+        toPage(cancel)
         cancel.recycle()
     }
 

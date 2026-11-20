@@ -13,6 +13,7 @@ import 'package:watch_app/core/zmode/match_store.dart';
 import 'package:watch_app/core/zmode/playback_resolver.dart';
 import 'package:watch_app/core/zmode/source_matcher.dart';
 import 'package:watch_app/core/zmode/zmode_source_prefs.dart';
+import 'package:watch_app/core/zmode/stream_probe.dart';
 
 const _ep2 = 'zm://anime/mal:100/ep/2';
 
@@ -118,6 +119,7 @@ void main() {
       candidates: (_) => src.loadedSources,
     );
     final r = PlaybackResolver(
+      probe: TrustingStreamProbe(),
       matcher: matcher,
       sources: src,
       store: store,

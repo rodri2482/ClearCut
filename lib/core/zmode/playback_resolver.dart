@@ -15,6 +15,7 @@ import 'match_store.dart';
 import 'source_matcher.dart';
 import 'source_order_prefs.dart';
 import 'source_score_store.dart';
+import 'stream_probe.dart';
 import 'zmode_ids.dart';
 import 'zmode_source_prefs.dart';
 
@@ -172,7 +173,11 @@ class PlaybackResolver {
     /// Counts a play against the source that served it. Optional — see
     /// [_scores].
     SourceScoreStore? scores,
-  }) : _budget = perSourceBudget ?? defaultPerSourceBudget,
+
+    /// Checks stream links before a source is accepted. Tests pass a fake.
+    StreamProbe? probe,
+  }) : _probe = probe ?? StreamProbe(),
+       _budget = perSourceBudget ?? defaultPerSourceBudget,
        _chosenBudget = chosenBudget ?? chosenSourceBudget,
        _relaxedBudget =
            relaxedBudget ?? perSourceBudget ?? relaxedPerSourceBudget,
@@ -184,6 +189,7 @@ class PlaybackResolver {
        _candidates = candidates,
        _scores = scores;
 
+  final StreamProbe _probe;
   final SourceMatcher _matcher;
   final SourceRepository _sources;
   final MatchStore _store;
@@ -1585,7 +1591,19 @@ class PlaybackResolver {
       onMiss(SweepReason.noStreams);
       return null;
     }
-    return _Attempt(match: match, episodeUrl: srcEp.url, streams: streams);
+    // ClearCut: only accept a source whose links actually answer like video,
+    // so auto-find moves on to the next source instead of handing the player
+    // dead links.
+    final live = await _probe.liveStreams(streams);
+    if (live.isEmpty) {
+      debugPrint(
+        '[playback] _resolve · $sourceId → ${streams.length} streams for '
+        'ep ${p.episode}, none playable — trying the next source',
+      );
+      onMiss(SweepReason.noStreams);
+      return null;
+    }
+    return _Attempt(match: match, episodeUrl: srcEp.url, streams: live);
   }
 
   String? _rememberedPlaybackSource(ZCanonical c, List<String> ordered) {

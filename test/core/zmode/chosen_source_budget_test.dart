@@ -15,6 +15,7 @@ import 'package:watch_app/core/zmode/playback_resolver.dart';
 import 'package:watch_app/core/zmode/source_matcher.dart';
 import 'package:watch_app/core/zmode/zmode_ids.dart';
 import 'package:watch_app/core/zmode/zmode_source_prefs.dart';
+import 'package:watch_app/core/zmode/stream_probe.dart';
 
 const _show = ZCanonical(ZKind.anime, 'mal:100');
 const _ep2 = 'zm://anime/mal:100/ep/2';
@@ -126,6 +127,7 @@ void main() {
       candidates: (_) => src.loadedSources,
     );
     final r = PlaybackResolver(
+      probe: TrustingStreamProbe(),
       matcher: matcher,
       sources: src,
       store: store,

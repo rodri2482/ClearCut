@@ -15,6 +15,7 @@ import 'package:watch_app/core/zmode/source_matcher.dart';
 import 'package:watch_app/core/zmode/source_score_store.dart';
 import 'package:watch_app/core/zmode/zmode_ids.dart';
 import 'package:watch_app/core/zmode/zmode_source_prefs.dart';
+import 'package:watch_app/core/zmode/stream_probe.dart';
 
 /// Progressive resolve yields the first genuine hit without awaiting the
 /// whole sweep. Uses the same fakes as playback_resolver_test.dart:
@@ -53,6 +54,7 @@ void main() {
   }) {
     if (preferred != null) prefs.set(show.kind, preferred);
     final r = PlaybackResolver(
+      probe: TrustingStreamProbe(),
       matcher: matcher,
       sources: sources,
       store: store,

@@ -17,6 +17,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.webkit.RenderProcessGoneDetail
@@ -162,6 +163,17 @@ class NoFlixPlayerActivity : ComponentActivity() {
         })
     }
 
+    // Gestures see every touch first, including over HTML5 full-screen video.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (::gestures.isInitialized) {
+            val decor = window.decorView
+            if (gestures.handle(ev, decor.width, decor.height) { super.dispatchTouchEvent(it) }) {
+                return true
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onDestroy() {
         webView?.let { root.removeView(it); it.destroy() }
         webView = null
@@ -207,7 +219,6 @@ class NoFlixPlayerActivity : ComponentActivity() {
         }
         view.webChromeClient = ChromeClient()
         view.webViewClient = BlockingClient()
-        gestures.attach(view)
         root.addView(
             view,
             FrameLayout.LayoutParams(
@@ -299,7 +310,6 @@ class NoFlixPlayerActivity : ComponentActivity() {
             )
             customView = view
             customViewCallback = callback
-            gestures.attach(view)
             gestures.bringHudToFront()
             updateOrientation()
         }

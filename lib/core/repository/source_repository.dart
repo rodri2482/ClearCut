@@ -168,6 +168,7 @@ class SourceRepository implements CatalogueRepository {
   /// A fresh disk hit is promoted into the in-memory cache at its original
   /// timestamp, so the live [searchStatus] call either reuses it (still inside
   /// the 3-minute memory TTL) or refetches naturally (older than that).
+  @override
   List<({String sourceId, List<MediaItem> items})> cachedSearch(
     String query, {
     required Iterable<String> sourceIds,

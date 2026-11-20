@@ -27,6 +27,7 @@ import '../playback/my_list.dart';
 import '../playback/playback_prefs.dart';
 import '../playback/pinned_sources.dart';
 import '../playback/search_history.dart';
+import '../playback/search_result_cache.dart';
 import '../playback/search_prefs.dart';
 import '../ui/home_rows_prefs.dart';
 import '../tracker/tracker_switch_prefs.dart';
@@ -467,6 +468,10 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   sl.registerSingleton<TorrentDownloadService>(TorrentDownloadService());
   await SearchHistory.init();
   sl.registerSingleton<SearchHistory>(SearchHistory());
+  // FrameXTV-style persisted search results: a repeat query paints instantly
+  // after a cold start instead of re-hitting every installed source.
+  await SearchResultCache.init();
+  sl.registerSingleton<SearchResultCache>(SearchResultCache());
   await AnimationPrefs.init(); // list/grid reveal toggle (phone/iOS only)
   await DetailPrefs.init(); // episode lists open reversed when enabled
   await IncognitoMode.init(); // privacy: pause history/tracking/RPC when on
@@ -1188,6 +1193,7 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
       // extension installs, so choosing English still returned Hebrew.
       mangaLangs: mangaLangPrefs,
       animeLangs: animeLangPrefs,
+      searchResultCache: sl<SearchResultCache>(),
     ),
   );
 

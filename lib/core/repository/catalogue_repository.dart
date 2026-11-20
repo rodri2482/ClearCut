@@ -16,6 +16,17 @@ abstract interface class CatalogueRepository {
   String displayName(String sourceId);
   void syncSearchCache();
 
+  /// Instant results for first-frame display while a live search revalidates.
+  /// Implementers backed by a persisted cache override this; the default keeps
+  /// other catalogues (tests, metadata-only mode) unchanged.
+  List<({String sourceId, List<MediaItem> items})> cachedSearch(
+    String query, {
+    required Iterable<String> sourceIds,
+    String category = 'sub',
+    Map<String, String?> filters = const {},
+    int page = 1,
+  }) => const <({String sourceId, List<MediaItem> items})>[];
+
   Future<List<HomeSection>> home({String category = 'sub', String? sourceId});
 
   Future<List<MediaItem>> search(

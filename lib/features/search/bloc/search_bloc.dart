@@ -511,6 +511,34 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     // already keeps a new source out of the cache; this covers removes too).
     _repo.syncSearchCache();
 
+    // FrameXTV-style "keep previous data": paint cached results on the very
+    // first frame while the live fan-out revalidates. A repeat query needs no
+    // network wait at all. These are a transient first frame only — `acc`
+    // below stays empty so a live response replaces them instead of appending
+    // a duplicate section for the same source.
+    final cached = _repo.cachedSearch(
+      q,
+      sourceIds: sources.map((s) => s.id),
+      filters: {for (final s in sources) s.id: state.filterSelectionFor(s.id)},
+    );
+    if (cached.isNotEmpty) {
+      final names = {for (final s in sources) s.id: s.name};
+      emit(
+        state.copyWith(
+          status: SearchStatus.success,
+          groups: [
+            for (var i = 0; i < cached.length; i++)
+              SourceResultGroup(
+                sourceId: cached[i].sourceId,
+                sourceName: names[cached[i].sourceId] ?? cached[i].sourceId,
+                items: cached[i].items,
+                arrivalIndex: i,
+              ),
+          ],
+        ),
+      );
+    }
+
     // What's genuinely in flight, so the screen's skeletons match reality
     // instead of its own guess at the source list.
     emit(
@@ -530,6 +558,10 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
 
     await Future.wait(
       sources.map((s) async {
+        // Stale run: don't even start this source. Cheap stand-in for
+        // FrameXTV's AbortController — a retyped query leaves no queued work
+        // holding the single JS call lane.
+        if (isClosed || gen != _runGen) return;
         final sw = Stopwatch()..start();
         try {
           final res = await _repo

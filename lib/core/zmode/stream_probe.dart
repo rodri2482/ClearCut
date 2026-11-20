@@ -6,20 +6,24 @@ import 'package:flutter/foundation.dart';
 import '../models/video_source.dart';
 
 /// ClearCut: checks that a source's stream links actually answer like video
-/// before auto-find accepts that source.
+/// before they are accepted or handed to the player.
 ///
 /// Without this, auto-find took the first source that returned *any* links.
 /// Many sources hand back dead links, HTML error/embed pages or blocked
 /// streams, so the player failed ("couldn't load this episode") while a
 /// source further down the list would have played.
+///
+/// HLS is followed down to a real video segment: a master playlist often loads
+/// while its variant playlists or segments are blocked (wrong Referer, expired
+/// token, geo-block), and only the segment answers that honestly.
 class StreamProbe {
   StreamProbe({Dio? dio})
     : _dio =
           dio ??
           Dio(
             BaseOptions(
-              connectTimeout: const Duration(seconds: 6),
-              receiveTimeout: const Duration(seconds: 6),
+              connectTimeout: const Duration(seconds: 4),
+              receiveTimeout: const Duration(seconds: 5),
               followRedirects: true,
               maxRedirects: 5,
               responseType: ResponseType.bytes,
@@ -29,23 +33,21 @@ class StreamProbe {
 
   final Dio _dio;
 
-  /// How many links are probed per source. The rest are kept unprobed (they
-  /// are usually other qualities of the same mirror).
-  static const int maxProbed = 6;
+  /// Links checked per source, all in parallel. Links beyond this are dropped
+  /// rather than passed on unchecked: an unchecked link is exactly what the
+  /// player used to land on and fail.
+  static const int maxProbed = 16;
 
-  /// The streams worth handing to the player, best first: the probed links
-  /// that answered, followed by any links that were not probed. Empty when
-  /// every probed link is dead, which means: try the next source.
+  /// The streams worth handing to the player — only links that answered like
+  /// video, in their original order. Empty means: try the next source.
   Future<List<VideoSource>> liveStreams(List<VideoSource> streams) async {
     if (streams.isEmpty) return streams;
     final probed = streams.take(maxProbed).toList();
     final results = await Future.wait(probed.map(isAlive));
-    final alive = [
+    return [
       for (var i = 0; i < probed.length; i++)
         if (results[i]) probed[i],
     ];
-    if (alive.isEmpty) return const [];
-    return [...alive, ...streams.skip(maxProbed)];
   }
 
   /// True when [s] looks playable. Links that can't be checked over plain
@@ -60,11 +62,23 @@ class StreamProbe {
     return proxy != null && proxy.isNotEmpty && await _probe(proxy, s.headers);
   }
 
-  Future<bool> _probe(String url, Map<String, String>? headers) async {
+  /// [depth] counts HLS hops: master → variant playlist → segment.
+  Future<bool> _probe(
+    String url,
+    Map<String, String>? headers, {
+    int depth = 0,
+  }) async {
     try {
+      final playlist = depth > 0 || _looksLikePlaylist(url);
       final r = await _dio.get<List<int>>(
         url,
-        options: Options(headers: {...?headers, 'Range': 'bytes=0-2047'}),
+        options: Options(
+          // Playlists are small text files and must be read whole; media only
+          // needs its first bytes.
+          headers: playlist
+              ? {...?headers}
+              : {...?headers, 'Range': 'bytes=0-4095'},
+        ),
       );
       final code = r.statusCode ?? 0;
       if (code < 200 || code >= 400) {
@@ -72,15 +86,20 @@ class StreamProbe {
         return false;
       }
       final bytes = r.data ?? const <int>[];
-      final head = utf8
-          .decode(bytes.take(512).toList(), allowMalformed: true)
+      final text = utf8
+          .decode(
+            bytes.length > 65536 ? bytes.sublist(0, 65536) : bytes,
+            allowMalformed: true,
+          )
           .trimLeft();
-      if (head.startsWith('#EXTM3U')) return true; // HLS playlist
+      if (text.startsWith('#EXTM3U')) {
+        return depth >= 2 ? true : _probeHls(url, text, headers, depth);
+      }
       final type = (r.headers.value('content-type') ?? '').toLowerCase();
       // A web page instead of video: an embed page, captcha or error page.
       if (type.contains('text/html') ||
-          head.startsWith('<!DOCTYPE') ||
-          head.startsWith('<html')) {
+          text.startsWith('<!DOCTYPE') ||
+          text.startsWith('<html')) {
         debugPrint('[probe] got a web page, not video · $url');
         return false;
       }
@@ -90,6 +109,42 @@ class StreamProbe {
       return false;
     }
   }
+
+  /// Follows an HLS playlist one level down: a master playlist to its first
+  /// variant, a media playlist to its first segment.
+  Future<bool> _probeHls(
+    String url,
+    String body,
+    Map<String, String>? headers,
+    int depth,
+  ) async {
+    final lines = const LineSplitter().convert(body);
+    String? next;
+    var afterTag = false;
+    for (final raw in lines) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      if (line.startsWith('#EXT-X-STREAM-INF') || line.startsWith('#EXTINF')) {
+        afterTag = true;
+        continue;
+      }
+      if (line.startsWith('#')) continue;
+      if (afterTag) {
+        next = line;
+        break;
+      }
+    }
+    // A playlist with nothing playable in it is not a stream.
+    if (next == null) {
+      debugPrint('[probe] HLS playlist lists nothing · $url');
+      return false;
+    }
+    final target = Uri.parse(url).resolve(next).toString();
+    return _probe(target, headers, depth: depth + 1);
+  }
+
+  static bool _looksLikePlaylist(String url) =>
+      (Uri.tryParse(url)?.path ?? url).toLowerCase().endsWith('.m3u8');
 }
 
 /// A probe that trusts every link — the pre-ClearCut behaviour. Used by tests

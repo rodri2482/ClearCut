@@ -1823,7 +1823,9 @@ class PhonePlayerActivity : Activity() {
                         url != null && url !in attemptedUrls
                     }
                     if (next == null) {
-                        failoverFailed()
+                        // ClearCut: this source is out of links — ask auto-find
+                        // for the next source before giving up.
+                        failoverNextSource(position, generation)
                     } else {
                         playMirror(next, position, generation)
                     }
@@ -1838,6 +1840,59 @@ class PhonePlayerActivity : Activity() {
                 override fun notImplemented() {
                     if (!uiAlive()) return
                     if (generation != mediaGeneration) return
+                    failoverFailed()
+                }
+            },
+        )
+    }
+
+    /**
+     * ClearCut: every link of the current source failed. In auto mode Dart
+     * marks that source unplayable for this episode and returns the next
+     * source's links (already checked to answer like video); an empty answer
+     * means there is no other source, and the usual error shows.
+     */
+    private fun failoverNextSource(position: Long, generation: Int) {
+        val ch = PhonePlayerBridge.channel ?: run { failoverFailed(); return }
+        failoverInFlight = true
+        val requestedIndex = currentIndex
+        if (loadingOverlay.visibility == View.VISIBLE) {
+            setLoadingStatus(getString(R.string.phone_player_status_retrying))
+        } else {
+            setBuffering(true)
+        }
+        toast("Trying another source…")
+        ch.invokeMethod(
+            "nextSource",
+            mapOf("index" to currentIndex),
+            object : io.flutter.plugin.common.MethodChannel.Result {
+                override fun success(result: Any?) {
+                    if (!uiAlive()) return
+                    failoverInFlight = false
+                    if (generation != mediaGeneration || requestedIndex != currentIndex) return
+                    val fresh = mapList(result)
+                    val next = fresh.firstOrNull { source ->
+                        val url = source["url"] as? String
+                        url != null && url !in attemptedUrls
+                    }
+                    if (next == null) {
+                        failoverFailed()
+                    } else {
+                        mirrors = fresh
+                        playMirror(next, position, generation)
+                    }
+                }
+
+                override fun error(code: String, msg: String?, details: Any?) {
+                    if (!uiAlive()) return
+                    failoverInFlight = false
+                    if (generation != mediaGeneration) return
+                    failoverFailed()
+                }
+
+                override fun notImplemented() {
+                    if (!uiAlive()) return
+                    failoverInFlight = false
                     failoverFailed()
                 }
             },

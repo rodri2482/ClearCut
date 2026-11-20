@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/zmode/zmode_ids.dart';
+import '../../core/zmode/source_matcher.dart';
+import '../../core/zmode/playback_resolver.dart';
 import '../../core/di/injector.dart';
 import '../../core/stremio/stremio_manager.dart';
 import '../../core/stremio/stremio_ref.dart';
@@ -518,6 +521,11 @@ class PhoneNativePlayer {
   static bool _forceInitialResume = false;
   static final _engineSources = <int, List<VideoSource>>{};
 
+  /// ClearCut: how many times this session moved on to another source after
+  /// one failed in the player. Each hop is a real scrape, so it is capped.
+  static int _sourceHops = 0;
+  static const int _maxSourceHops = 4;
+
   static List<VideoSource> _rememberEngineSources(
     int index,
     List<VideoSource> sources, {
@@ -594,6 +602,7 @@ class PhoneNativePlayer {
     _forceInitialResume = forceInitialResume;
     _pendingEngineFailure = null;
     _engineSources.clear();
+    _sourceHops = 0;
     _resolve = resolveSources;
     _pollSources = pollSources;
     _peek = peek;
@@ -1179,6 +1188,57 @@ class PhoneNativePlayer {
           for (var i = 0; i < prepared.length; i++)
             phoneSourceMap(prepared[i], i),
         ];
+      case 'nextSource':
+        // ClearCut: every link of the current source failed in the player.
+        // In auto mode, mark that source unplayable for this episode and let
+        // auto-find hand over the next one, instead of ending on an error
+        // while other sources were available. Bounded, and never replaces a
+        // source the viewer pinned by hand.
+        {
+          final args = _callArgs(call);
+          final index = (args?['index'] as num?)?.toInt() ?? -1;
+          if (index < 0 || index >= _episodes.length) return const <Map>[];
+          if (_sourceHops >= _maxSourceHops) return const <Map>[];
+          final epUrl = _episodes[index].url;
+          final canonical = ZmodeIds.parseShow(epUrl);
+          if (ZmodeIds.parseEpisode(epUrl) == null ||
+              canonical == null ||
+              !sl.isRegistered<PlaybackResolver>()) {
+            return const <Map>[];
+          }
+          if (sl.isRegistered<SourceMatcher>() &&
+              sl<SourceMatcher>().pinnedSource(canonical) != null) {
+            return const <Map>[];
+          }
+          final resolver = sl<PlaybackResolver>();
+          final winner = resolver.resolvedSourceId(epUrl, category: _category);
+          if (winner == null) return const <Map>[];
+          _sourceHops++;
+          resolver.markSourceUnplayable(epUrl, winner, category: _category);
+          _engineSources.remove(index);
+          final session = _sessionId;
+          final requestCategory = _category;
+          try {
+            final sources = await _resolveSources(_episodes[index]);
+            final prepared = _rememberEngineSources(
+              index,
+              await _prepareSources(sources),
+              session: session,
+              category: requestCategory,
+            );
+            if (session != _sessionId || _closed?.isCompleted != false) {
+              return const <Map>[];
+            }
+            return [
+              for (var i = 0; i < prepared.length; i++)
+                phoneSourceMap(prepared[i], i),
+            ];
+          } catch (e) {
+            // The sweep found nothing else: a real dead end, not a crash.
+            debugPrint('[phone] nextSource · no other source: $e');
+            return const <Map>[];
+          }
+        }
       case 'switchCategory':
         {
           // Native Audio menu's Sub/Dub row. Same episode, same list, Dart's

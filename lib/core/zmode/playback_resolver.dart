@@ -1109,11 +1109,23 @@ class PlaybackResolver {
   }) async {
     final hit = _winners[_winKey(zmEpisodeUrl, category)];
     if (hit != null) {
-      return _sources.sources(
+      // ClearCut: the remembered source's links are fetched FRESH here, and
+      // were never checked — some sources hand out new or short-lived links
+      // every time, so the links auto-find verified were not the ones the
+      // player got. Check these too; if none play, skip this source for the
+      // episode and let the sweep find the next one.
+      final fresh = await _sources.sources(
         hit.episodeUrl,
         sourceId: hit.sourceId,
         fast: fast,
       );
+      final live = await _probe.liveStreams(fresh);
+      if (live.isNotEmpty) return live;
+      debugPrint(
+        '[playback] sources · remembered ${hit.sourceId} now returns no '
+        'playable link for $zmEpisodeUrl — trying the next source',
+      );
+      markSourceUnplayable(zmEpisodeUrl, hit.sourceId, category: category);
     }
     return (await resolveForPlayback(
       zmEpisodeUrl,

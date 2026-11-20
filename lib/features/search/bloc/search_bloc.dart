@@ -115,6 +115,15 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
   /// is queried in full again on the next search.
   static const Duration sourceTimeout = Duration(seconds: 60);
 
+  /// How long the first wave gets before we show what we have.
+  ///
+  /// FrameXTV never lets its slowest backend gate the first result. ClearCut
+  /// used to await every source (60s tail, with JS sources serialised behind
+  /// one call lane), so a single slow source held the whole screen hostage.
+  /// After this budget the run finalises with whatever landed; sources still
+  /// in flight keep running and stream their groups in as they arrive.
+  static const Duration fastWaveBudget = Duration(seconds: 8);
+
   /// What a capped-out search returns — shaped like a normal empty result so it
   /// flows through the same outcome handling as any other failure.
   static ({List<MediaItem> items, SourceOutcome outcome}) _timedOut() =>
@@ -556,7 +565,7 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     // arrivalIndex N, so sections render fastest-first (CloudStream-style).
     var arrived = 0;
 
-    await Future.wait(
+    final fanout = Future.wait(
       sources.map((s) async {
         // Stale run: don't even start this source. Cheap stand-in for
         // FrameXTV's AbortController — a retyped query leaves no queued work
@@ -632,12 +641,26 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
       }),
     );
 
+    // Don't wait for the 60s tail. The per-source closures keep running past
+    // this point and emit their groups as they land, so slow sources no longer
+    // hold the first result hostage.
+    await fanout.timeout(fastWaveBudget, onTimeout: () => <void>[]);
+
     if (isClosed || gen != _runGen) return;
     // Finalize: if nothing came back, surface error-or-empty appropriately.
+    // While any source is still in flight we keep a neutral success/empty
+    // state — calling it an error now would be a lie, and a later arrival can
+    // still fill the groups in.
+    final pending = sources.any(
+      (s) =>
+          !state.respondedSources.contains(s.id) && !failed.containsKey(s.id),
+    );
     if (acc.isEmpty) {
       emit(
         state.copyWith(
-          status: failed.isNotEmpty ? SearchStatus.error : SearchStatus.success,
+          status: failed.isNotEmpty && !pending
+              ? SearchStatus.error
+              : SearchStatus.success,
           groups: const [],
           failedSources: Map.of(failed),
         ),

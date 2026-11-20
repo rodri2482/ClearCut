@@ -24,16 +24,38 @@ Stream and download anime episodes, anime movies, TV series and movies. A built-
 - **Android TV**: a full remote-friendly interface.
 - **Private**: no account, no analytics, and no developer servers. History, library and downloads stay on your device.
 
+## Download
+
+Grab the APK for your phone from the [Releases](../../releases) page:
+
+| File | For |
+| --- | --- |
+| `app-arm64-v8a-release.apk` | Almost every phone from the last 7 years. **Pick this one if unsure.** |
+| `app-armeabi-v7a-release.apk` | Older 32-bit phones and some Android TV boxes |
+| `app-x86_64-release.apk` | Emulators and x86 Chromebooks |
+
 ## Build
 
-Requirements: Flutter 3.44.7, JDK 17, Android SDK (AGP downloads NDK r28c and CMake 3.22.1 for the ad-block engine).
+Requirements: Flutter 3.44.7, JDK 17, Android SDK. AGP downloads NDK r28c and CMake 3.22.1 itself for the ad-block engine.
 
 ```bash
 flutter pub get
 ZANGETSU_NO_DISCORD=1 flutter build apk --debug
 ```
 
-The APK is written to `build/app/outputs/flutter-apk/`. On Windows, build from a short path: the dependency tree exceeds the 260-character path limit when nested deep.
+`ZANGETSU_NO_DISCORD=1` skips the proprietary Discord SDK, which isn't in this repo.
+
+**Signed release APKs.** Copy `android/key.properties.example` to `android/key.properties` and point it at your keystore. Then run:
+
+```bash
+ZANGETSU_NO_DISCORD=1 flutter build apk --release --split-per-abi
+```
+
+Without `key.properties`, release builds fall back to debug signing. Never commit the keystore or `key.properties`. Both are git-ignored.
+
+**Windows:** build from a short path such as `C:\Users\you\ClearCut`. The dependency tree exceeds Windows' 260-character path limit when the project is nested deep. Also run `git config --global core.longpaths true` once before `flutter pub get`.
+
+**GitHub Actions:** `.github/workflows/build.yml` builds the APK when started by hand from the Actions tab. Pushing a `v*` tag publishes a release. See the comments in that file for the signing secrets it needs.
 
 ## Disclaimer
 

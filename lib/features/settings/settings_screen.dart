@@ -702,7 +702,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _accountRow(
                   onTap: () => _push(const ViewerProfilesScreen()),
                   autofocus: _isTv,
-                  semanticLabel: 'Profiles & account',
+                  semanticLabel: kCloudEnabled
+                      ? 'Profiles & account'
+                      : 'Profiles',
                   avatar: CircleAvatar(
                     radius: 24,
                     backgroundColor: viewerProfileAvatarColor(profile.avatar),
@@ -716,8 +718,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       photoDiameter: 48,
                     ),
                   ),
-                  title: 'Profiles & account',
-                  subtitle: 'Watching as ${profile.name} · $accountStatus',
+                  title: kCloudEnabled ? 'Profiles & account' : 'Profiles',
+                  subtitle: kCloudEnabled
+                      ? 'Watching as ${profile.name} · $accountStatus'
+                      : 'Watching as ${profile.name}',
                   trailing: const Icon(
                     Icons.chevron_right_rounded,
                     color: AppColors.textTertiary,

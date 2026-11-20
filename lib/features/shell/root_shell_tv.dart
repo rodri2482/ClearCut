@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/app_mode.dart';
+import '../../core/app_config.dart';
 import '../../core/di/injector.dart';
 import '../../core/playback/my_list.dart';
 import '../../core/playback/category_store.dart';
@@ -602,7 +603,7 @@ class _RootShellTvState extends State<RootShellTv> with WidgetsBindingObserver {
       final profile = sl.isRegistered<ViewerProfileStore>()
           ? sl<ViewerProfileStore>().activeProfile
           : null;
-      final name = auth.isLoggedIn
+      final name = auth.isLoggedIn || !kCloudEnabled
           ? (profile?.name ?? auth.displayName)
           : context.l10n.signIn;
       final avatar = profile?.photoUrl ?? auth.avatarUrl;
@@ -611,7 +612,7 @@ class _RootShellTvState extends State<RootShellTv> with WidgetsBindingObserver {
         variant: TvFocusVariant.none,
         semanticLabel: name,
         onTap: () {
-          if (auth.isLoggedIn) {
+          if (auth.isLoggedIn || !kCloudEnabled) {
             _confirmProfileSwitch();
           } else {
             Navigator.of(context).push(

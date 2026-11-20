@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../../core/app_config.dart';
 import 'dart:typed_data';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -560,250 +561,263 @@ class _ProfileAccountSectionState extends State<ProfileAccountSection> {
   }
 
   @override
-  Widget build(BuildContext context) => BlocBuilder<AuthCubit, AuthState>(
-    builder: (context, state) {
-      final isTv = sl.isRegistered<AppMode>() && sl<AppMode>().isTv;
-      if (!state.isLoggedIn) {
-        void signIn() {
-          Navigator.of(
-            context,
-          ).push(MaterialPageRoute(builder: (_) => const LoginScreen()));
-        }
+  Widget build(BuildContext context) => !kCloudEnabled
+      ? const SizedBox.shrink() // ClearCut: no accounts
+      : BlocBuilder<AuthCubit, AuthState>(
+          builder: (context, state) {
+            final isTv = sl.isRegistered<AppMode>() && sl<AppMode>().isTv;
+            if (!state.isLoggedIn) {
+              void signIn() {
+                Navigator.of(
+                  context,
+                ).push(MaterialPageRoute(builder: (_) => const LoginScreen()));
+              }
 
-        return Padding(
-          padding: EdgeInsets.fromLTRB(24, isTv ? 20 : 28, 24, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(context.l10n.notSignedIn),
-              const SizedBox(height: 12),
-              if (isTv)
-                TvFocusable(
-                  autofocus: true,
-                  semanticLabel: context.l10n.signIn,
-                  onTap: signIn,
-                  variant: TvFocusVariant.row,
-                  borderRadius: 14,
-                  child: Container(
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: const Color(0x1AFFFFFF),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: AppColors.hairline, width: 0.5),
-                    ),
-                    child: Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.login_rounded,
-                            color: AppColors.textPrimary,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            context.l10n.signIn,
-                            style: AppText.button.copyWith(
-                              color: AppColors.textPrimary,
+              return Padding(
+                padding: EdgeInsets.fromLTRB(24, isTv ? 20 : 28, 24, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(context.l10n.notSignedIn),
+                    const SizedBox(height: 12),
+                    if (isTv)
+                      TvFocusable(
+                        autofocus: true,
+                        semanticLabel: context.l10n.signIn,
+                        onTap: signIn,
+                        variant: TvFocusVariant.row,
+                        borderRadius: 14,
+                        child: Container(
+                          height: 56,
+                          decoration: BoxDecoration(
+                            color: const Color(0x1AFFFFFF),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: AppColors.hairline,
+                              width: 0.5,
                             ),
                           ),
-                        ],
+                          child: Center(
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.login_rounded,
+                                  color: AppColors.textPrimary,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  context.l10n.signIn,
+                                  style: AppText.button.copyWith(
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      SecondaryButton(
+                        label: context.l10n.signIn,
+                        icon: Icons.login_rounded,
+                        onPressed: signIn,
+                      ),
+                  ],
+                ),
+              );
+            }
+
+            Widget accountAvatar() {
+              final radius = isTv ? 56.0 : 48.0;
+              final profiles = sl.isRegistered<ViewerProfileStore>()
+                  ? sl<ViewerProfileStore>()
+                  : null;
+              Widget buildAvatar(String? accountPhotoUrl) => CircleAvatar(
+                radius: radius,
+                backgroundColor: AppColors.surface2,
+                backgroundImage: accountPhotoUrl != null
+                    ? CachedNetworkImageProvider(accountPhotoUrl)
+                    : null,
+                child: accountPhotoUrl == null
+                    ? Text(
+                        state.displayName.isNotEmpty
+                            ? state.displayName[0].toUpperCase()
+                            : '?',
+                        style: AppText.largeTitle,
+                      )
+                    : null,
+              );
+              if (profiles == null) return buildAvatar(state.avatarUrl);
+              return ValueListenableBuilder<int>(
+                valueListenable: profiles.revision,
+                builder: (context, _, _) {
+                  final defaultProfile = profiles.profiles.firstWhere(
+                    (profile) => profile.id == kDefaultProfileId,
+                  );
+                  return buildAvatar(
+                    profilePhotoForFace(
+                      profile: defaultProfile,
+                      accountPhotoUrl: state.avatarUrl,
+                    ),
+                  );
+                },
+              );
+            }
+
+            final avatar = accountAvatar();
+            final avatarBusy = state.busy || _avatarUploading;
+            final name = Text(state.displayName, style: AppText.title);
+            final logout = isTv
+                ? TvFocusable(
+                    onTap: () {
+                      context.read<AuthCubit>().logout();
+                      Navigator.of(context).pop();
+                    },
+                    child: SizedBox(
+                      height: 56,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0x1AFFFFFF),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: AppColors.hairline,
+                            width: 0.5,
+                          ),
+                        ),
+                        child: Center(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.logout_rounded,
+                                color: AppColors.textPrimary,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                context.l10n.logOut,
+                                style: AppText.button.copyWith(
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                )
-              else
-                SecondaryButton(
-                  label: context.l10n.signIn,
-                  icon: Icons.login_rounded,
-                  onPressed: signIn,
-                ),
-            ],
-          ),
-        );
-      }
+                  )
+                : SecondaryButton(
+                    label: context.l10n.logOut,
+                    icon: Icons.logout_rounded,
+                    onPressed: () async {
+                      // Backs up an un-synced library first / warns before wiping.
+                      final done = await safeLogout(context);
+                      if (done && context.mounted) Navigator.of(context).pop();
+                    },
+                  );
 
-      Widget accountAvatar() {
-        final radius = isTv ? 56.0 : 48.0;
-        final profiles = sl.isRegistered<ViewerProfileStore>()
-            ? sl<ViewerProfileStore>()
-            : null;
-        Widget buildAvatar(String? accountPhotoUrl) => CircleAvatar(
-          radius: radius,
-          backgroundColor: AppColors.surface2,
-          backgroundImage: accountPhotoUrl != null
-              ? CachedNetworkImageProvider(accountPhotoUrl)
-              : null,
-          child: accountPhotoUrl == null
-              ? Text(
-                  state.displayName.isNotEmpty
-                      ? state.displayName[0].toUpperCase()
-                      : '?',
-                  style: AppText.largeTitle,
-                )
-              : null,
-        );
-        if (profiles == null) return buildAvatar(state.avatarUrl);
-        return ValueListenableBuilder<int>(
-          valueListenable: profiles.revision,
-          builder: (context, _, _) {
-            final defaultProfile = profiles.profiles.firstWhere(
-              (profile) => profile.id == kDefaultProfileId,
-            );
-            return buildAvatar(
-              profilePhotoForFace(
-                profile: defaultProfile,
-                accountPhotoUrl: state.avatarUrl,
+            return Padding(
+              padding: EdgeInsets.fromLTRB(24, isTv ? 20 : 28, 24, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Center(
+                    child: isTv
+                        ? avatar
+                        : GestureDetector(
+                            onTap: avatarBusy
+                                ? null
+                                : () => _pickAvatar(context),
+                            child: Stack(
+                              alignment: AlignmentDirectional.bottomEnd,
+                              children: [
+                                avatar,
+                                Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.accent,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: avatarBusy
+                                      ? const SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Icon(
+                                          Icons.camera_alt_rounded,
+                                          size: 14,
+                                          color: Colors.white,
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 16),
+                  Center(
+                    child: isTv
+                        ? name
+                        : InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: () => _editName(context, state.displayName),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      state.displayName,
+                                      style: AppText.title,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 7),
+                                  const Icon(
+                                    Icons.edit_rounded,
+                                    size: 15,
+                                    color: AppColors.textTertiary,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 4),
+                  Center(
+                    child: Text(
+                      state.user?.email ?? '',
+                      style: AppText.caption,
+                    ),
+                  ),
+                  SizedBox(height: isTv ? 24 : 32),
+                  if (!isTv) ...[
+                    SizedBox(
+                      width: double.infinity,
+                      child: SecondaryButton(
+                        label: context.l10n.pairATV,
+                        icon: Icons.tv_rounded,
+                        onPressed: () =>
+                            Navigator.of(context).push(PairTvScreen.route()),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  SizedBox(width: double.infinity, child: logout),
+                ],
               ),
             );
           },
         );
-      }
-
-      final avatar = accountAvatar();
-      final avatarBusy = state.busy || _avatarUploading;
-      final name = Text(state.displayName, style: AppText.title);
-      final logout = isTv
-          ? TvFocusable(
-              onTap: () {
-                context.read<AuthCubit>().logout();
-                Navigator.of(context).pop();
-              },
-              child: SizedBox(
-                height: 56,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: const Color(0x1AFFFFFF),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppColors.hairline, width: 0.5),
-                  ),
-                  child: Center(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.logout_rounded,
-                          color: AppColors.textPrimary,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          context.l10n.logOut,
-                          style: AppText.button.copyWith(
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            )
-          : SecondaryButton(
-              label: context.l10n.logOut,
-              icon: Icons.logout_rounded,
-              onPressed: () async {
-                // Backs up an un-synced library first / warns before wiping.
-                final done = await safeLogout(context);
-                if (done && context.mounted) Navigator.of(context).pop();
-              },
-            );
-
-      return Padding(
-        padding: EdgeInsets.fromLTRB(24, isTv ? 20 : 28, 24, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Center(
-              child: isTv
-                  ? avatar
-                  : GestureDetector(
-                      onTap: avatarBusy ? null : () => _pickAvatar(context),
-                      child: Stack(
-                        alignment: AlignmentDirectional.bottomEnd,
-                        children: [
-                          avatar,
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: AppColors.accent,
-                              shape: BoxShape.circle,
-                            ),
-                            child: avatarBusy
-                                ? const SizedBox(
-                                    width: 14,
-                                    height: 14,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Icon(
-                                    Icons.camera_alt_rounded,
-                                    size: 14,
-                                    color: Colors.white,
-                                  ),
-                          ),
-                        ],
-                      ),
-                    ),
-            ),
-            const SizedBox(height: 16),
-            Center(
-              child: isTv
-                  ? name
-                  : InkWell(
-                      borderRadius: BorderRadius.circular(8),
-                      onTap: () => _editName(context, state.displayName),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                state.displayName,
-                                style: AppText.title,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const SizedBox(width: 7),
-                            const Icon(
-                              Icons.edit_rounded,
-                              size: 15,
-                              color: AppColors.textTertiary,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-            ),
-            const SizedBox(height: 4),
-            Center(
-              child: Text(state.user?.email ?? '', style: AppText.caption),
-            ),
-            SizedBox(height: isTv ? 24 : 32),
-            if (!isTv) ...[
-              SizedBox(
-                width: double.infinity,
-                child: SecondaryButton(
-                  label: context.l10n.pairATV,
-                  icon: Icons.tv_rounded,
-                  onPressed: () =>
-                      Navigator.of(context).push(PairTvScreen.route()),
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            SizedBox(width: double.infinity, child: logout),
-          ],
-        ),
-      );
-    },
-  );
 }
 
 class ProfileScreen extends StatelessWidget {

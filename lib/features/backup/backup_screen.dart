@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/app_mode.dart';
+import '../../core/app_config.dart';
 import '../../core/backup/backup_cloud.dart';
 import '../../core/backup/backup_file.dart';
 import '../../core/backup/backup_payload.dart';
@@ -446,12 +447,13 @@ class _BackupScreenState extends State<BackupScreen> {
                     subtitle: context.l10n.saveABackupFileToYourDownloadsFolder,
                     onTap: _busy ? null : _saveToFile,
                   ),
-                  SettingsTile(
-                    icon: Icons.cloud_upload_outlined,
-                    title: context.l10n.backUpToCloud,
-                    subtitle: context.l10n.saveACopyToYourAccountNeedsSignIn,
-                    onTap: _busy ? null : _backupToCloud,
-                  ),
+                  if (kCloudEnabled)
+                    SettingsTile(
+                      icon: Icons.cloud_upload_outlined,
+                      title: context.l10n.backUpToCloud,
+                      subtitle: context.l10n.saveACopyToYourAccountNeedsSignIn,
+                      onTap: _busy ? null : _backupToCloud,
+                    ),
                 ],
               ),
               const SettingsSectionLabel('Restore a backup'),
@@ -463,15 +465,16 @@ class _BackupScreenState extends State<BackupScreen> {
                     subtitle: context.l10n.pickABackupFileYouSavedEarlier,
                     onTap: _busy ? null : _restoreFromFile,
                   ),
-                  SettingsTile(
-                    icon: Icons.cloud_download_outlined,
-                    title: context.l10n.restoreFromCloud,
-                    subtitle: context.l10n.bringBackYourLatestCloudBackup,
-                    onTap: _busy ? null : _restoreFromCloud,
-                  ),
+                  if (kCloudEnabled)
+                    SettingsTile(
+                      icon: Icons.cloud_download_outlined,
+                      title: context.l10n.restoreFromCloud,
+                      subtitle: context.l10n.bringBackYourLatestCloudBackup,
+                      onTap: _busy ? null : _restoreFromCloud,
+                    ),
                 ],
               ),
-              if (uid != null)
+              if (kCloudEnabled && uid != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                   child: FutureBuilder<DateTime?>(

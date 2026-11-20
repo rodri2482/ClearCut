@@ -7,6 +7,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/tracker/tracker_item_url.dart';
 import '../../core/zmode/metadata_provider_prefs.dart';
 import '../../core/app_mode.dart';
+import '../../core/app_config.dart';
 import '../../core/di/injector.dart';
 import '../../core/mode/content_mode.dart';
 import '../../core/mode/content_mode_cubit.dart';
@@ -1541,7 +1542,7 @@ class _MyListViewState extends State<_MyListView> with WidgetsBindingObserver {
 
   Widget _empty(BuildContext context) {
     final auth = context.watch<AuthCubit>().state;
-    if (!auth.isLoggedIn) {
+    if (kCloudEnabled && !auth.isLoggedIn) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),

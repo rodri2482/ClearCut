@@ -7,6 +7,11 @@ const String kAppName = 'ClearCut';
 /// GitHub release checks can't see it. Turn on if the repo goes public.
 const bool kUpdaterEnabled = false;
 
+/// Cloud accounts and sync. Off: ClearCut has no server of its own, so every
+/// sign-in prompt and account screen is hidden. Library, history and
+/// downloads are stored on the device and work without an account.
+const bool kCloudEnabled = false;
+
 /// Running app version shown in Settings/About. Populated from the real build
 /// (PackageInfo) at boot so it never goes stale; this literal is just the
 /// pre-boot fallback.
@@ -41,7 +46,8 @@ const String kDiscordInviteUrl = 'https://discord.gg/hey6vz9kg6';
 /// Only the public URL lives here. The Discord webhook stays on the Worker:
 /// this app is open source and its APK is public, so anything put in the app
 /// can be read straight back out of it.
-const String kLogIntakeUrl = ''; // ClearCut: no log server; reports use the share sheet.
+const String kLogIntakeUrl =
+    ''; // ClearCut: no log server; reports use the share sheet.
 
 /// Public R2 manifest for the rotating profile-picker backdrops. The manifest
 /// contains up to three image filenames stored beside it in this bucket.
@@ -51,8 +57,7 @@ const String kProfilePickerArtworkManifestUrl =
 /// Developer announcements feed (a plain JSON file in the public app repo).
 /// The app READS this on launch to show in-app announcements — never writes.
 /// Edit + push that file to broadcast a message to every user.
-const String kAnnouncementsUrl =
-    ''; // ClearCut: no announcements feed
+const String kAnnouncementsUrl = ''; // ClearCut: no announcements feed
 
 /// TMDB API key for movie/TV trailer lookups (TrailerService). Anime trailers
 /// use AniList and need no key. Supply via `--dart-define=TMDB_API_KEY=...`,

@@ -2885,11 +2885,8 @@ class _MangaReaderScreenState extends State<MangaReaderScreen>
                       : SizedBox.expand(
                           child: ColoredBox(color: AppColors.surface2),
                         ),
-                  errorBuilder: (_, _, _) => const Icon(
-                    Icons.broken_image_outlined,
-                    color: Colors.white38,
-                    size: 48,
-                  ),
+                  errorBuilder: (_, error, _) =>
+                      _pageError(page, index, error, width),
                 ),
                 page: page,
                 index: index,
@@ -3044,6 +3041,51 @@ class _MangaReaderScreenState extends State<MangaReaderScreen>
     return _plainPageImage(context, page, index);
   }
 
+  /// Pages already reported in the log, so a failing page isn't logged on
+  /// every rebuild.
+  final Set<String> _loggedPageErrors = {};
+
+  /// ClearCut: a failed page says so, says why in the log (host + error, so a
+  /// shared log pins down a source's problem), and can be retried — instead of
+  /// a bare broken-image icon with no way forward.
+  Widget _pageError(PageImage page, int index, Object error, int width) {
+    if (_loggedPageErrors.add(page.url)) {
+      final host = Uri.tryParse(page.url)?.host ?? '?';
+      final sent = (page.headers ?? const {}).keys
+          .where((k) => !k.startsWith('x-'))
+          .join(', ');
+      debugPrint(
+        '[reader] page ${index + 1} failed · $host · headers: '
+        '${sent.isEmpty ? 'none' : sent} · $error',
+      );
+    }
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.broken_image_outlined,
+            color: Colors.white38,
+            size: 48,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            "Couldn't load this page",
+            style: TextStyle(color: Colors.white60),
+          ),
+          TextButton(
+            onPressed: () async {
+              _loggedPageErrors.remove(page.url);
+              await _pageProvider(page, width).evict();
+              if (mounted) setState(() {});
+            },
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// The old, untiled page draw — used directly when tiling is off or not
   /// possible for this page, and as [TiledPageImage]'s fallback.
   Widget _plainPageImage(BuildContext context, PageImage page, int index) {
@@ -3056,13 +3098,9 @@ class _MangaReaderScreenState extends State<MangaReaderScreen>
       onLoaded: () => _loaded.add(index),
       placeholderBuilder: (context, progress) =>
           _pagePlaceholder(context, index, progress),
-      errorBuilder: (_, _, _) => const SizedBox(
-        height: 200,
-        child: Icon(
-          Icons.broken_image_outlined,
-          color: Colors.white38,
-          size: 48,
-        ),
+      errorBuilder: (_, error, _) => SizedBox(
+        height: 220,
+        child: _pageError(page, index, error, width),
       ),
     );
   }

@@ -191,12 +191,19 @@ class MangayomiProvider implements BaseProvider, ReadingProvider {
         final headersByHost = await _cloudflareHeadersByHost(
           mapped.map((page) => page.url),
         );
+        // ClearCut: Mangayomi extensions usually set their image headers once
+        // for the whole source (getHeaders → a Referer for the site), which the
+        // Mangayomi app sends with every page. The bridge can't ask for those,
+        // so pages went out with no Referer and hotlink-protected image hosts
+        // answered 403 — a broken-image icon in the reader while "open in
+        // browser" worked. Send the site as Referer when the page has none.
+        final site = source.baseUrl.toString().replaceAll(RegExp(r'/+$'), '');
         return [
           for (final page in mapped)
             PageImage(
               url: page.url,
               headers: _mergeHeaders(
-                page.headers,
+                _withDefaultReferer(page.headers, '$site/'),
                 headersByHost[Uri.tryParse(page.url)?.host] ?? const {},
               ),
             ),
@@ -245,6 +252,18 @@ class MangayomiProvider implements BaseProvider, ReadingProvider {
     } on PlatformException {
       return const {};
     }
+  }
+
+  /// [headers] plus `Referer: [referer]` unless the extension set one.
+  static Map<String, String> _withDefaultReferer(
+    Map<String, String>? headers,
+    String referer,
+  ) {
+    final out = <String, String>{...?headers};
+    if (!out.keys.any((k) => k.toLowerCase() == 'referer')) {
+      out['Referer'] = referer;
+    }
+    return out;
   }
 
   Map<String, String>? _mergeHeaders(

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../provider/repo_inspector.dart' show normalizeRepoUrl;
 
 import 'package:dio/dio.dart';
 import 'package:get_it/get_it.dart';
@@ -51,12 +52,12 @@ class AniyomiRepoEntry {
     required String repoBaseUrl,
     String absoluteApkUrl = '',
     String absoluteIconUrl = '',
-  })  : apkUrl = absoluteApkUrl.startsWith('http')
-            ? absoluteApkUrl
-            : '${AniyomiRepo.normalizeBase(repoBaseUrl)}/apk/$apk',
-        iconUrl = absoluteIconUrl.startsWith('http')
-            ? absoluteIconUrl
-            : '${AniyomiRepo.normalizeBase(repoBaseUrl)}/icon/$pkg.png';
+  }) : apkUrl = absoluteApkUrl.startsWith('http')
+           ? absoluteApkUrl
+           : '${AniyomiRepo.normalizeBase(repoBaseUrl)}/apk/$apk',
+       iconUrl = absoluteIconUrl.startsWith('http')
+           ? absoluteIconUrl
+           : '${AniyomiRepo.normalizeBase(repoBaseUrl)}/icon/$pkg.png';
 
   final String name;
   final String pkg;
@@ -116,7 +117,8 @@ class AniyomiRepo {
   /// — `/index.min.json`, `/index.json` or `/index.pb` — and any trailing
   /// slash. Shared with Mihon, which prefers `index.pb`.
   static String normalizeBase(String base) {
-    var b = base.trim();
+    // ClearCut: tidy the paste and turn GitHub page links into raw links.
+    var b = normalizeRepoUrl(base);
     while (b.endsWith('/')) {
       b = b.substring(0, b.length - 1);
     }
@@ -126,10 +128,13 @@ class AniyomiRepo {
     // here too — it's the file the fetcher now prefers, so it's the most
     // likely thing to be pasted; leaving it out meant the app asked for
     // `.../index.pb/index.pb` and the repo just 404'd.
+    // `repo.json` is Mihon's repo descriptor; its index sits beside it, so a
+    // pasted repo.json link used to become `.../repo.json/index.pb` → 404.
     for (final name in const [
       '/index.min.json',
       '/index.json',
       '/index.pb',
+      '/repo.json',
     ]) {
       if (b.endsWith(name)) {
         b = b.substring(0, b.length - name.length);

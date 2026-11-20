@@ -5,6 +5,9 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:hive/hive.dart';
 
 import '../../core/di/injector.dart';
+import '../../core/ui/app_toast.dart';
+import '../../core/provider/repo_router.dart';
+import '../../core/provider/repo_inspector.dart';
 import '../../core/hive/source_icon_store.dart';
 import '../../core/ui/source_icon_tile.dart';
 import '../../core/i18n/source_languages.dart';
@@ -63,12 +66,23 @@ class _MihonSourcesScreenState extends State<MihonSourcesScreen> {
   }
 
   Future<void> _addMihonRepo(String url) async {
+    // ClearCut: check the link and identify its format before saving it.
+    // Another format is added to its own screen; a broken link is not saved.
+    showAppToast(context, 'Checking repository…');
+    try {
+      final result = await RepoRouter().add(url);
+      if (mounted) showAppToast(context, result.message);
+    } on RepoInspectException catch (e) {
+      if (mounted) showAppToast(context, e.message);
+      return;
+    } catch (e) {
+      if (mounted) showAppToast(context, 'Could not add this repository: $e');
+      return;
+    }
     if (!Hive.isBoxOpen(kMihonReposBoxName)) {
       await openBoxSafely<String>(kMihonReposBoxName);
     }
     final box = Hive.box<String>(kMihonReposBoxName);
-    if (box.values.contains(url)) return;
-    await box.add(url);
     if (mounted) setState(() => _mihonRepoUrls = box.values.toList());
   }
 

@@ -1159,6 +1159,11 @@ class CloudStreamManager extends ChangeNotifier {
   /// (case-insensitive). Any loaded providers not matched to a persisted repo
   /// are collected into a trailing synthetic "Other" group (only when present)
   /// — this covers sources loaded from the host cache before persistence.
+  /// URLs of the persisted repos (read-only), for duplicate checks.
+  List<String> get repoUrls => [
+    for (final r in _repos) (r['url'] ?? '').toString(),
+  ];
+
   List<CsRepoGroup> get repoGroups {
     final groups = <CsRepoGroup>[];
     final claimed = <String>{}; // sourceIds already placed in a repo group

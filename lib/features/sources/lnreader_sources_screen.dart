@@ -3,6 +3,9 @@ import 'package:hive/hive.dart';
 import 'package:watch_app/core/hive/safe_box.dart';
 
 import '../../core/di/injector.dart';
+import '../../core/ui/app_toast.dart';
+import '../../core/provider/repo_router.dart';
+import '../../core/provider/repo_inspector.dart';
 import '../../core/ui/source_icon_tile.dart';
 import '../../core/lnreader/lnreader_extension_service.dart';
 import '../../core/lnreader/lnreader_manager.dart';
@@ -180,12 +183,22 @@ class _LnReaderSourcesScreenState extends State<LnReaderSourcesScreen> {
   }
 
   Future<void> _addRepo(String url) async {
+    // ClearCut: check the link and identify its format before saving it.
+    // Another format is added to its own screen; a broken link is not saved.
+    showAppToast(context, 'Checking repository…');
+    try {
+      final result = await RepoRouter().add(url);
+      if (mounted) showAppToast(context, result.message);
+    } on RepoInspectException catch (e) {
+      if (mounted) showAppToast(context, e.message);
+      return;
+    } catch (e) {
+      if (mounted) showAppToast(context, 'Could not add this repository: $e');
+      return;
+    }
     if (!Hive.isBoxOpen(kLnReaderReposBoxName)) {
       await openBoxSafely<String>(kLnReaderReposBoxName);
     }
-    final box = Hive.box<String>(kLnReaderReposBoxName);
-    if (box.values.contains(url)) return;
-    await box.add(url);
     await _load(refresh: true);
   }
 

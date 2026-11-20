@@ -13,6 +13,9 @@ import '../../core/aniyomi/aniyomi_repo.dart';
 import '../../core/aniyomi/aniyomi_update.dart';
 import '../../core/app_mode.dart';
 import '../../core/di/injector.dart';
+import '../../core/ui/app_toast.dart';
+import '../../core/provider/repo_router.dart';
+import '../../core/provider/repo_inspector.dart';
 import '../../core/i18n/source_languages.dart';
 import '../../core/prefs/source_lang_prefs.dart';
 import '../../core/provider/base_provider.dart';
@@ -26,7 +29,8 @@ import '../../core/tv/tv_focusable.dart';
 import '../../core/tv/tv_list_focusable.dart';
 import '../../core/tv/tv_text_field.dart';
 import '../../core/ui/states.dart';
-import 'aniyomi_repo_tab.dart' show kAniyomiReposBoxName, AniyomiAddRepoDialog, AniyomiRepoTab;
+import 'aniyomi_repo_tab.dart'
+    show kAniyomiReposBoxName, AniyomiAddRepoDialog, AniyomiRepoTab;
 import 'source_language_sheet.dart';
 import 'sources_search_field.dart';
 import '../../core/ui/app_dialog.dart';
@@ -74,19 +78,32 @@ class _AniyomiSourcesScreenState extends State<AniyomiSourcesScreen> {
   }
 
   Future<void> _addAniyomiRepo(String url) async {
+    // ClearCut: check the link and identify its format before saving it.
+    // Another format is added to its own screen; a broken link is not saved.
+    showAppToast(context, 'Checking repository…');
+    try {
+      final result = await RepoRouter().add(url);
+      if (mounted) showAppToast(context, result.message);
+    } on RepoInspectException catch (e) {
+      if (mounted) showAppToast(context, e.message);
+      return;
+    } catch (e) {
+      if (mounted) showAppToast(context, 'Could not add this repository: $e');
+      return;
+    }
     if (!Hive.isBoxOpen(kAniyomiReposBoxName)) {
       await openBoxSafely<String>(kAniyomiReposBoxName);
     }
     final box = Hive.box<String>(kAniyomiReposBoxName);
-    if (box.values.contains(url)) return;
-    await box.add(url);
     if (mounted) setState(() => _aniyomiRepoUrls = box.values.toList());
   }
 
   Future<void> _removeAniyomiRepo(String url) async {
     if (!Hive.isBoxOpen(kAniyomiReposBoxName)) return;
     final box = Hive.box<String>(kAniyomiReposBoxName);
-    final key = box.toMap().entries
+    final key = box
+        .toMap()
+        .entries
         .where((e) => e.value == url)
         .map((e) => e.key)
         .firstOrNull;

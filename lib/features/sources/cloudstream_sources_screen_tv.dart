@@ -32,18 +32,16 @@ class _CsTvViewState extends State<_CsTvView> {
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final count = await sl<CloudStreamManager>().addRepo(url);
+      // ClearCut: identify and validate the link first, so a repo with no
+      // plugins (or a different format) is never reported as "Repo added".
+      final result = await RepoRouter().add(url);
       messenger
         ..clearSnackBars()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              count == 0
-                  ? context.l10n.repoAdded
-                  : context.l10n.repoAddedWithSourcesAvailable(count),
-            ),
-          ),
-        );
+        ..showSnackBar(SnackBar(content: Text(result.message)));
+    } on RepoInspectException catch (e) {
+      messenger
+        ..clearSnackBars()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
       messenger
         ..clearSnackBars()
@@ -150,11 +148,7 @@ class _CsTvViewState extends State<_CsTvView> {
                       ),
                       child: Row(
                         children: [
-                          Icon(
-                            Icons.add,
-                            color: AppColors.accent,
-                            size: 18,
-                          ),
+                          Icon(Icons.add, color: AppColors.accent, size: 18),
                           const SizedBox(width: 8),
                           Text(
                             context.l10n.addCSRepo,

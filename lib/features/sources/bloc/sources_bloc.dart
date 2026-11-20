@@ -5,6 +5,8 @@ import 'package:hive/hive.dart';
 
 import '../../../core/provider/provider_registry.dart';
 import '../../../core/provider/provider_repo_registry.dart';
+import '../../../core/provider/repo_inspector.dart';
+import '../../../core/provider/repo_router.dart';
 import '../../../core/ui/global_messenger.dart';
 import 'sources_event.dart';
 import 'sources_state.dart';
@@ -285,9 +287,34 @@ class SourcesBloc extends Bloc<SourcesEvent, SourcesState> {
   /// — the dialog renders it inline).
   Future<String?> addRepo(String url, {String? customName}) async {
     try {
-      final repo = await _repos.fetchAndCache(url, customName: customName);
-      if (!isClosed) add(SourcesNoticeRequested('Added ${repo.displayName}'));
+      // ClearCut: identify the repository first. A ClearCut repo is stored
+      // here as before (with its custom name); CloudStream / Aniyomi / Mihon /
+      // LNReader / Stremio links go to their own adapter instead of being
+      // saved here with zero sources.
+      final inspection = await RepoInspector().inspect(url);
+      if (inspection.format == RepoFormat.clearcut) {
+        final existed = _repos.has(inspection.url);
+        final repo = await _repos.fetchAndCache(
+          inspection.url,
+          customName: customName,
+        );
+        if (!isClosed) {
+          add(
+            SourcesNoticeRequested(
+              existed
+                  ? '${repo.displayName} is already added — refreshed it.'
+                  : 'Added ${repo.displayName} '
+                        '(${repo.sources.length} sources)',
+            ),
+          );
+        }
+        return null;
+      }
+      final result = await RepoRouter().add(url);
+      if (!isClosed) add(SourcesNoticeRequested(result.message));
       return null;
+    } on RepoInspectException catch (e) {
+      return e.message;
     } on ProviderRepoException catch (e) {
       return e.message;
     } catch (e) {

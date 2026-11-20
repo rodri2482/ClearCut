@@ -8,6 +8,8 @@ import '../../core/ui/source_icon_tile.dart';
 import '../../core/ui/source_switcher.dart' show cloudStreamIconUrls;
 import '../../core/di/injector.dart';
 import '../../core/provider/cloudstream_provider.dart';
+import '../../core/provider/repo_inspector.dart';
+import '../../core/provider/repo_router.dart';
 import '../../core/state/active_source_cubit.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text.dart';

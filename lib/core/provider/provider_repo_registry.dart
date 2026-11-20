@@ -5,6 +5,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 
+import 'repo_inspector.dart';
+
 /// A single source entry inside a provider repo manifest. Matches the
 /// minimal v1 manifest schema.
 class RepoSource {
@@ -183,7 +185,8 @@ class ProviderReposRegistry {
   /// preserve the existing override (if any) so manifest pulls don't
   /// clobber a user's rename.
   Future<ProviderRepo> fetchAndCache(String url, {String? customName}) async {
-    final trimmed = url.trim();
+    // ClearCut: tidy pasted links (quotes, missing scheme, GitHub page links).
+    final trimmed = normalizeRepoUrl(url);
     if (trimmed.isEmpty) {
       throw ProviderRepoException('Repo URL is empty');
     }
@@ -212,23 +215,55 @@ class ProviderReposRegistry {
       if (body == null || body.isEmpty) {
         throw ProviderRepoException('Empty manifest response');
       }
-      final json = jsonDecode(body) as Map<String, dynamic>;
+      final decoded = jsonDecode(body);
+      final format = detectRepoFormat(decoded);
+      if (format != RepoFormat.clearcut || decoded is! Map) {
+        throw ProviderRepoException(
+          format == null
+              ? 'Unsupported format: this is not a ClearCut repository.'
+              : 'This is a ${format.label} repository, not a ClearCut one.',
+        );
+      }
+      final json = Map<String, dynamic>.from(decoded);
+      // One malformed entry used to throw (a missing `id` or `file` cast to
+      // String) and lose the whole repo; skip it instead.
+      final sources = <RepoSource>[];
+      for (final m
+          in ((json['sources'] as List<dynamic>?) ?? const [])
+              .whereType<Map>()) {
+        try {
+          final src = RepoSource.fromJson(Map<String, dynamic>.from(m));
+          if (src.id.isNotEmpty && src.file.isNotEmpty) sources.add(src);
+        } catch (e) {
+          debugPrint('ProviderReposRegistry: skipped bad source entry — $e');
+        }
+      }
+      // Never store (or report as added) a repo with nothing to install.
+      if (sources.isEmpty) {
+        throw ProviderRepoException(
+          'No compatible sources: this repository lists no valid sources.',
+        );
+      }
       final repo = ProviderRepo(
         url: trimmed,
         name: (json['name'] as String?) ?? 'Unnamed repo',
         description: (json['description'] as String?) ?? '',
-        sources: ((json['sources'] as List<dynamic>?) ?? const [])
-            .whereType<Map>()
-            .map((m) => RepoSource.fromJson(Map<String, dynamic>.from(m)))
-            .toList(),
+        sources: sources,
         customName: resolvedCustomName,
         lastSyncedAt: DateTime.now(),
       );
       await _box.put(trimmed, repo.toJson());
       return repo;
     } on DioException catch (e) {
+      final code = e.response?.statusCode;
       throw ProviderRepoException(
-        'HTTP ${e.response?.statusCode ?? '?'}: ${e.message ?? e.toString()}',
+        code == 404
+            ? 'Nothing at this address (HTTP 404). Check the link — for '
+                  'GitHub, use the "Raw" link to the manifest file.'
+            : code != null
+            ? 'The server answered HTTP $code. Try again later.'
+            : "Network error: couldn't reach the repository. Check your "
+                  'connection and try again.',
       );
     } on FormatException catch (e) {
       throw ProviderRepoException('Manifest is not valid JSON: ${e.message}');

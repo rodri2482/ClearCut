@@ -94,3 +94,7 @@ local.properties
 android/key.properties
 *.keystore
 *.jks
+
+# Built APKs copied out for sharing (publish them as GitHub releases instead)
+/apk/
+*.apk

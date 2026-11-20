@@ -1,3 +1,4 @@
+import 'network_quality.dart';
 import '../models/video_source.dart';
 
 /// Parses a quality label like `'1080p'` into a comparable int (height in px).
@@ -87,7 +88,23 @@ VideoSource? pickDefault(
     }
     if (best != null) return best;
   }
-  // 'auto'/'highest', or nothing carried a resolution: the existing default.
+  // ClearCut: 'auto' (or no preference) follows the connection — the best
+  // stream at or below what the network sustains. 'highest' stays highest.
+  if (preferQuality == null || preferQuality == 'auto') {
+    final cap = NetworkQuality.instance.maxHeight;
+    if (cap != null) {
+      for (final s in pool) {
+        final px = resolutionPx(s.quality);
+        if (px != null && px <= cap) return s; // pool is high→low
+      }
+      // Every labelled stream is above the cap: take the smallest of them.
+      final labelled = pool
+          .where((s) => resolutionPx(s.quality) != null)
+          .toList();
+      if (labelled.isNotEmpty) return labelled.last;
+    }
+  }
+  // 'highest', or nothing carried a resolution: the existing default.
   return pool.first;
 }
 

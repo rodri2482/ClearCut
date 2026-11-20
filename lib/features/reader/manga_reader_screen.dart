@@ -3901,7 +3901,7 @@ class _MangaReaderScreenState extends State<MangaReaderScreen>
     final provider =
         cbz ??
         (_isLocal(page.url) ? FileImage(File(page.url)) : native) ??
-        CachedNetworkImageProvider(page.url, headers: page.headers);
+        CachedNetworkImageProvider(page.url, headers: realHeaders(page.headers));
     // Bound both dimensions before GPU upload; width-only decoding squashes tall strips.
     return ResizeImage(
       provider,
@@ -4612,12 +4612,22 @@ class _MangaReaderScreenState extends State<MangaReaderScreen>
   /// the player's own screenshot save (`player_controller.dart`'s
   /// `captureScreenshot`): try the write, and only request the runtime
   /// permission on the older-Android/iOS path where it throws.
+  /// The page's image as a file, fetched the same way the reader draws it:
+  /// natively for sources that load pages through their own client, otherwise
+  /// via the HTTP cache with the page's real headers (never the internal
+  /// routing markers).
+  Future<File> _pageImageFile(PageImage page) async {
+    final cached = await _pageFiles.fileFor(page.url, page.headers);
+    if (cached != null) return cached;
+    return DefaultCacheManager().getSingleFile(
+      page.url,
+      headers: realHeaders(page.headers) ?? const {},
+    );
+  }
+
   Future<void> _savePage(PageImage page) async {
     try {
-      final file = await DefaultCacheManager().getSingleFile(
-        page.url,
-        headers: page.headers ?? const {},
-      );
+      final file = await _pageImageFile(page);
       final bytes = await file.readAsBytes();
       final name = 'ClearCut_${DateTime.now().millisecondsSinceEpoch}';
       try {
@@ -4634,10 +4644,7 @@ class _MangaReaderScreenState extends State<MangaReaderScreen>
 
   Future<void> _sharePage(PageImage page) async {
     try {
-      final file = await DefaultCacheManager().getSingleFile(
-        page.url,
-        headers: page.headers ?? const {},
-      );
+      final file = await _pageImageFile(page);
       await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
     } catch (_) {
       _toast('Share failed');

@@ -516,6 +516,30 @@ class MainActivity : AppCompatActivity(), FlutterEngineConfigurator {
                 }
             }
 
+        // ClearCut: Android's estimate of the active network's download speed,
+        // used by Auto quality before the player has measured anything itself.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "clearcut/network")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "estimate" -> {
+                        try {
+                            val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                                as android.net.ConnectivityManager
+                            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+                            result.success(
+                                mapOf(
+                                    "downKbps" to (caps?.linkDownstreamBandwidthKbps ?: 0),
+                                    "metered" to cm.isActiveNetworkMetered,
+                                )
+                            )
+                        } catch (e: Exception) {
+                            result.success(mapOf("downKbps" to 0, "metered" to false))
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // NoFlix ad-free web player: plays a TMDB title in an ad-blocked WebView.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "zangetsu/noflix")
             .setMethodCallHandler { call, result ->

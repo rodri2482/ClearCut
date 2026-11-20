@@ -30,13 +30,18 @@ const MethodChannel _kMihonChannel = MethodChannel('zangetsu/mihon');
 /// Keyed by [sourceId] (the numeric Mihon source id) and [url] (the cover/page
 /// image URL). Flutter's image cache deduplicates on the pair.
 class MihonImage extends ImageProvider<MihonImage> {
-  const MihonImage(this.sourceId, this.url);
+  const MihonImage(this.sourceId, this.url, {this.headers});
 
   /// The numeric Mihon source id as registered in `MihonSourceManager`.
   final int sourceId;
 
   /// Absolute URL of the cover / page image.
   final String url;
+
+  /// ClearCut: the page's own request headers from the source (e.g. a
+  /// page-specific Referer), merged natively over the source's headers.
+  /// Not part of the cache key: the same url is the same image.
+  final Map<String, String>? headers;
 
   @override
   Future<MihonImage> obtainKey(ImageConfiguration configuration) =>
@@ -53,7 +58,12 @@ class MihonImage extends ImageProvider<MihonImage> {
   ) async {
     final Uint8List? bytes = await _kMihonChannel.invokeMethod<Uint8List>(
       'getImage',
-      {'sourceId': key.sourceId, 'url': key.url},
+      {
+        'sourceId': key.sourceId,
+        'url': key.url,
+        if (key.headers != null && key.headers!.isNotEmpty)
+          'headers': key.headers,
+      },
     );
     if (bytes == null || bytes.isEmpty) {
       throw Exception(

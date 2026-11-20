@@ -120,6 +120,7 @@ import '../discord/discord_rpc.dart';
 import '../aniyomi/aniyomi_extension_service.dart';
 import '../aniyomi/aniyomi_provider.dart';
 import '../lnreader/lnreader_extension_service.dart';
+import '../playback/network_quality.dart';
 import '../lnreader/lnreader_manager.dart';
 import '../lnreader/novel_lang_prefs.dart';
 import '../prefs/source_lang_prefs.dart';
@@ -783,6 +784,8 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   sl.registerSingleton<LnReaderExtensionService>(lnrService);
   sl.registerSingleton<LnReaderManager>(lnrManager);
   await lnrManager.init();
+  // ClearCut: first connection estimate for Auto quality (background).
+  unawaited(NetworkQuality.instance.refresh());
   // ClearCut built-in novel source (Project Gutenberg, public domain). Stored
   // like a user-installed LNReader plugin, refreshed from the bundled asset on
   // every launch so app updates also update the source.

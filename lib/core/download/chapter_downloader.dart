@@ -10,6 +10,7 @@ import '../mode/content_mode.dart';
 import '../models/episode.dart';
 import '../models/page_content.dart';
 import '../repository/source_repository.dart';
+import '../ui/native_page_provider.dart';
 import 'chapter_download.dart';
 import 'chapter_download_store.dart';
 import 'download_prefs.dart';
@@ -467,10 +468,18 @@ class ChapterDownloader extends ChangeNotifier {
     List<int>? data;
     for (var attempt = 1; attempt <= _pageAttempts; attempt++) {
       try {
+        // ClearCut: pages the source loads through its own client (every Mihon
+        // HTTP source) are downloaded the same way, so a chapter that reads
+        // fine also downloads; the internal routing markers are never sent.
+        final native = await fetchNativePageBytes(page.url, page.headers);
+        if (native != null) {
+          data = native;
+          break;
+        }
         final res = await _dio.get<List<int>>(
           page.url,
           options: Options(
-            headers: page.headers,
+            headers: realHeaders(page.headers),
             responseType: ResponseType.bytes,
           ),
         );

@@ -25,6 +25,7 @@ import '../../core/models/episode.dart';
 import '../../core/models/provider_info.dart';
 import '../../core/models/video_source.dart';
 import '../../core/playback/hls.dart';
+import '../../core/playback/network_quality.dart';
 import '../../core/playback/playback_prefs.dart';
 import '../../core/playback/source_health_store.dart';
 import '../../core/playback/filler_service.dart';
@@ -625,6 +626,14 @@ class PlayerCubit extends Cubit<PlayerState> {
   // "· proxy" version of the same quality. Aniyomi-only + direct-only, so
   // CloudStream / JS / torrent sources are completely unaffected.
   Timer? _startTimer;
+
+  /// ClearCut: samples mpv's download speed while streaming, so Auto quality
+  /// learns what this network really sustains ([NetworkQuality]).
+  Timer? _netSampler;
+
+  /// True while the viewer has pinned a specific HLS rung from the quality
+  /// menu; Auto must not override that pin.
+  bool _pinnedVariant = false;
   // Never-started watchdog (all sources): a dead playlist mpv retries without
   // erroring, so without this nothing ever fires and the spinner sits forever.
   // 30s (generous: normal starts take seconds), cancelled by the first frame.
@@ -2705,7 +2714,39 @@ class PlayerCubit extends Cubit<PlayerState> {
     );
   }
 
-  /// Switch the HLS resolution. [v] == null → Auto (highest); otherwise the
+  /// ClearCut: with quality on Auto, start HLS streams on the best rung the
+  /// connection sustains (mpv otherwise always opens the top rung, 'max').
+  /// A rung the viewer pinned from the quality menu is left alone.
+  Future<void> _applyAutoHlsBitrate() async {
+    if (_pinnedVariant || _preferredQuality() != 'auto') return;
+    final p = player.platform;
+    if (p is! NativePlayer) return;
+    await NetworkQuality.instance.refresh();
+    final cap = NetworkQuality.instance.maxBitrate;
+    try {
+      await p.setProperty('hls-bitrate', cap == null ? 'max' : '$cap');
+    } catch (_) {}
+  }
+
+  /// Samples mpv's `cache-speed` (bytes/s of the current download) every few
+  /// seconds. Zero while the buffer is full is ignored by [NetworkQuality].
+  void _startNetSampler() {
+    if (_netSampler != null) return;
+    _netSampler = Timer.periodic(const Duration(seconds: 4), (_) async {
+      if (isClosed) {
+        _netSampler?.cancel();
+        return;
+      }
+      final p = player.platform;
+      if (p is! NativePlayer) return;
+      try {
+        final v = double.tryParse(await p.getProperty('cache-speed'));
+        if (v != null) NetworkQuality.instance.recordThroughput(v);
+      } catch (_) {}
+    });
+  }
+
+  /// Switch the HLS resolution. [v] == null → Auto (best rung the connection sustains); otherwise the
   /// chosen variant. Keeps the MASTER playlist open and pins the rung via mpv's
   /// `hls-bitrate` rather than opening the bare variant URL — some masters
   /// (e.g. AnimeSalt) carry audio in separate renditions, so a bare video
@@ -2715,7 +2756,12 @@ class PlayerCubit extends Cubit<PlayerState> {
     if (master == null) return;
     // Target the variant by bitrate; 'max' for Auto (or when BANDWIDTH is
     // missing, since we can't pin precisely without it).
-    final target = (v == null || v.bandwidth <= 0) ? 'max' : '${v.bandwidth}';
+    // ClearCut: Auto follows the connection instead of always taking 'max'.
+    _pinnedVariant = v != null;
+    final autoCap = NetworkQuality.instance.maxBitrate;
+    final target = v == null
+        ? (autoCap == null ? 'max' : '$autoCap')
+        : (v.bandwidth <= 0 ? 'max' : '${v.bandwidth}');
     final p = player.platform;
     if (p is NativePlayer) {
       try {
@@ -3100,7 +3146,9 @@ class PlayerCubit extends Cubit<PlayerState> {
         _softwareDecodeRetryError = null;
         if (invalidatesSoftwareRetry) _recovering = false;
       }
+      await _applyAutoHlsBitrate();
       await player.open(Media(playUrl, httpHeaders: s.headers));
+      _startNetSampler();
       if (g == _gen && !isClosed) {
         _simklOpening = false;
         _syncSimkl();
@@ -4270,6 +4318,7 @@ class PlayerCubit extends Cubit<PlayerState> {
 
   @override
   Future<void> close() {
+    _netSampler?.cancel();
     _simklPlayback?.stop();
     // Leaving supersedes anything still in flight. Every delayed continuation
     // in here bails when _gen moves on, so bumping it once is what stops one

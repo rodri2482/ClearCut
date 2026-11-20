@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/services.dart' show MethodChannel;
 
+import '../ui/native_page_provider.dart';
 import '../aniyomi/aniyomi_filters.dart';
 import '../aniyomi/aniyomi_provider.dart';
 import '../lnreader/lnreader_manager.dart';
@@ -1117,13 +1119,60 @@ class SourceRepository implements CatalogueRepository {
     }
   }
 
+  /// ClearCut: pages fetched by Flutter itself (JS / Mangayomi sources) get the
+  /// same session a browser would send — the WebView's cookies for the image
+  /// host (including a Cloudflare clearance) and its User-Agent — when the
+  /// source didn't set them. Without these, image hosts that check a session
+  /// answered 403 and the page stayed blank while "open in browser" showed it.
+  /// Natively-routed pages (Mihon/Aniyomi) already use the source's own client.
+  static const _sessionChannel = MethodChannel('zangetsu/mihon');
+
+  Future<List<PageImage>> _withBrowserSession(List<PageImage> pages) async {
+    if (pages.isEmpty || !Platform.isAndroid) return pages;
+    final first = pages.first;
+    if (!first.url.startsWith('http') ||
+        nativePageProvider(first.url, first.headers) != null) {
+      return pages;
+    }
+    Map<String, String> session;
+    try {
+      final res = await _sessionChannel.invokeMethod<Map<dynamic, dynamic>>(
+        'imageCookie',
+        {'url': first.url},
+      );
+      session = {
+        for (final e in (res ?? const {}).entries) '${e.key}': '${e.value}',
+      };
+    } catch (_) {
+      return pages;
+    }
+    if (session.isEmpty) return pages;
+    bool has(Map<String, String>? h, String k) =>
+        h?.keys.any((x) => x.toLowerCase() == k.toLowerCase()) ?? false;
+    return [
+      for (final p in pages)
+        // Cookies belong to one host; other hosts keep their own headers.
+        if (Uri.tryParse(p.url)?.host != Uri.tryParse(first.url)?.host)
+          p
+        else
+          PageImage(
+            url: p.url,
+            headers: {
+              ...?p.headers,
+              for (final e in session.entries)
+                if (!has(p.headers, e.key)) e.key: e.value,
+            },
+          ),
+    ];
+  }
+
   Future<List<PageImage>> _fetchPages(
     ReadingProvider p,
     String key,
     String chapterUrl,
   ) async {
     final started = DateTime.now();
-    final fetched = await p.getPages(chapterUrl);
+    final fetched = await _withBrowserSession(await p.getPages(chapterUrl));
     final ms = DateTime.now().difference(started).inMilliseconds;
     // The reader shows a spinner for exactly this long, and until now nothing
     // recorded it — so "it was black for a few seconds" was unanswerable from

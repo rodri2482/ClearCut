@@ -418,9 +418,22 @@ class MihonBridge(
                         result.error("NO_SOURCE", "Source $sourceId not found or not an HTTP source", null)
                         return@setMethodCallHandler
                     }
+                    // ClearCut: a page may carry its own headers from the source's
+                    // imageRequest() (e.g. a page-specific Referer). Merge them
+                    // over the source's headers; internal x-* markers are dropped.
+                    val pageHeaders = call.argument<Map<String, String>>("headers")
+                    val headers = src.headers.newBuilder().apply {
+                        pageHeaders?.forEach { (k, v) ->
+                            if (!k.startsWith("x-mihon") && !k.startsWith("x-ani")) set(k, v)
+                        }
+                    }.build()
                     scope.launch(Dispatchers.IO) {
                         runCatching {
-                            val response = src.client.newCall(GET(url, src.headers)).execute()
+                            val response = src.client.newCall(GET(url, headers)).execute()
+                            if (!response.isSuccessful) {
+                                response.close()
+                                throw IllegalStateException("HTTP ${response.code} for $url")
+                            }
                             response.body?.bytes()
                                 ?: throw IllegalStateException("empty body for $url")
                         }.fold(
@@ -790,24 +803,6 @@ internal suspend fun ensureImageUrl(page: Page, resolve: suspend (Page) -> Strin
  *
  * [http] is null for a non-[HttpSource]; then there are no headers to send.
  */
-/** Whether this source's own client REWRITES the image bytes.
- *
- *  Some extensions serve their pages deliberately scrambled and put the
- *  descrambler on their OkHttp client (Comix's `configureClient()` adds a
- *  `Descrambler.interceptor`; ~56 extensions upstream do something of this
- *  kind). Chapter pages otherwise leave here as url+headers and Flutter fetches
- *  them itself, which never touches that client — so the reader drew the
- *  scrambled image and the page looked torn into squares.
- *
- *  Detected rather than listed: a source that does not override `client` gets
- *  the shared one plus a single UncaughtExceptionInterceptor, so anything
- *  beyond that count is the extension's own doing. Cheap, and it needs no
- *  per-source table to keep up to date.
- */
-private fun rewritesImageBytes(http: HttpSource): Boolean = runCatching {
-    val base = Injekt.get<NetworkHelper>().client.interceptors.size + 1
-    http.client.interceptors.size > base
-}.getOrDefault(false)
 
 internal fun pageDeliveryJson(http: HttpSource?, page: Page): JSONObject {
     val json = MihonJson.pageToJson(page)
@@ -817,7 +812,14 @@ internal fun pageDeliveryJson(http: HttpSource?, page: Page): JSONObject {
     }
     // The reader keys off this exactly the way covers already do: the marker is
     // internal, stripped before any request goes out.
-    val nativeImage = rewritesImageBytes(http)
+    // ClearCut: EVERY page of an HTTP source is loaded natively, through the
+    // source's own OkHttpClient — the way Mihon itself loads pages. That client
+    // carries the source's interceptors, rate limits, session and Cloudflare
+    // cookies, and a TLS fingerprint image hosts accept; Flutter's own image
+    // downloader has none of that, so many sources' pages stayed blank in the
+    // reader while "open in browser" showed them. (The old check only routed
+    // sources whose interceptor count suggested descrambling.)
+    val nativeImage = true
     val request = imageRequestOf(http, page)
     if (request != null) {
         // Upstream's own doc says an override may "send different headers or

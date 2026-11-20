@@ -226,7 +226,7 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
 
   // Ordered (value, label) options for each picker.
   static const List<(String, String)> _qualityOptions = [
-    ('auto', 'Auto'),
+    ('auto', 'Auto (matches your connection)'),
     ('highest', 'Highest'),
     ('1080p', '1080p'),
     ('720p', '720p'),

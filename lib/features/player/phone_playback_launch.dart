@@ -19,6 +19,7 @@ import '../../core/share/share_link.dart';
 import '../../core/models/provider_info.dart';
 import '../../core/models/episode.dart';
 import '../../core/models/video_source.dart';
+import '../../core/playback/network_quality.dart';
 import '../../core/playback/playback_prefs.dart';
 import '../../core/playback/title_prefs.dart';
 import '../../core/playback/resume_store.dart';
@@ -424,6 +425,8 @@ Future<bool> launchPhonePlayback({
   void Function(PhonePlaybackFailure)? onEngineFallback,
   bool forceInitialResume = false,
 }) async {
+  // ClearCut: fresh connection estimate for Auto quality (never throws).
+  unawaited(NetworkQuality.instance.refresh());
   return PhoneNativePlayer.play(
     sourceId: sourceId,
     episodes: episodes,

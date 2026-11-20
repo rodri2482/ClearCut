@@ -882,16 +882,24 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   // ClearCut built-in sources: free, legal content that works out of the box.
   // Re-seeded every launch (purgeBundled above clears bundled entries), and a
   // failure here never blocks boot — the app simply starts without them.
-  try {
-    await registry.installFromBundled(
-      name: 'clearcut_archive',
-      jsSource: await rootBundle.loadString(
-        'assets/builtin_sources/archive_films.js',
-      ),
-      displayName: 'Internet Archive (free films)',
-    );
-  } catch (e) {
-    debugPrint('[builtin] Internet Archive source failed to load: $e');
+  // Each one is loaded on its own so one failing source never hides the rest.
+  for (final builtin in const [
+    ('clearcut_archive', 'archive_films.js', 'Internet Archive (free films)'),
+    ('clearcut_nasa', 'nasa_video.js', 'NASA (free space videos)'),
+    ('clearcut_wikimedia', 'wikimedia_video.js', 'Wikimedia Commons (free films)'),
+    ('clearcut_blender', 'blender_movies.js', 'Blender Open Movies'),
+  ]) {
+    try {
+      await registry.installFromBundled(
+        name: builtin.$1,
+        jsSource: await rootBundle.loadString(
+          'assets/builtin_sources/${builtin.$2}',
+        ),
+        displayName: builtin.$3,
+      );
+    } catch (e) {
+      debugPrint('[builtin] ${builtin.$3} failed to load: $e');
+    }
   }
   // Load repo-installed JS providers into the runtime. Bounded so a provider
   // whose JS HANGS (flutter_js can deadlock) can't trap the splash — the

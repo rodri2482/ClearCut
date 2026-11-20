@@ -21,6 +21,9 @@ Stream and download anime episodes, anime movies, TV series and movies. A built-
 - **Downloads**: save episodes and movies (including HLS streams with subtitles) for offline viewing. Downloads keep running in the background.
 - **Built-in free sources** that work with no setup:
   - **Internet Archive (free films)**: public-domain classics such as sci-fi and horror, comedy and the silent era, played straight from archive.org's MP4 files in up to 1080p.
+  - **NASA (free space videos)**: launches, missions, Mars, the ISS and telescopes from NASA's Image and Video Library, in up to 1080p with NASA's captions.
+  - **Wikimedia Commons (free films)**: public-domain and freely licensed films, animation, short films and newsreels. Each title shows its author and licence.
+  - **Blender Open Movies**: the Blender Foundation's 14 Creative Commons animated films, from *Elephants Dream* (2006) to *Wing It!* (2023), in up to 4K, credited to Blender with their licences.
   - **Project Gutenberg (free books)**: over 70,000 public-domain books with covers, split into chapters, in the Novel reader. If gutenberg.org is down, they load from the official PGLAF mirror.
 - **Gestures in the ad-free player**: swipe left or right to seek, swipe up or down on the right for volume and on the left for brightness. The native player also has double-tap seek and pinch-to-zoom.
 - **Extensions**: add Aniyomi, CloudStream, Stremio and Mihon extension repositories from **Settings → Extensions**. ClearCut ships with no third-party repositories. You choose which ones to add.

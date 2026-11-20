@@ -12,11 +12,16 @@ function getInfo() {
            logo: SITE + '/images/glogo.jpg', type: 'movie', version: '1.0.0' };
 }
 
-function _getJson(url) {
+function _getJsonOnce(url) {
   return fetch(url, { headers: { 'Accept': 'application/json' } }).then(function (r) {
     if (!r.ok) throw new Error('Internet Archive: HTTP ' + r.status);
     try { return JSON.parse(r.body || 'null'); } catch (e) { throw new Error('Internet Archive: bad JSON'); }
   });
+}
+
+// archive.org occasionally drops a request; one retry covers almost all of it.
+function _getJson(url) {
+  return _getJsonOnce(url).catch(function () { return _getJsonOnce(url); });
 }
 
 function _search(q, sort, page, rows) {
@@ -42,9 +47,15 @@ function _item(doc) {
   };
 }
 
+// Only films that have a file the player can open are listed, so tapping a
+// title never ends in "couldn't load this episode".
 function _collectionQuery(c) {
-  return 'collection:(' + c + ') AND mediatype:(movies)';
+  return 'collection:(' + c + ') AND mediatype:(movies) AND ' +
+    'format:(MPEG4 OR "h.264" OR "512Kb MPEG4" OR "h.264 IA")';
 }
+
+var PRIMARY = /\.(mp4|m4v)$/i;
+var FALLBACK = /\.(mkv|webm|ogv|avi|mpe?g)$/i;
 
 var ROWS = [
   { id: 'popular', title: 'Most watched classics', q: _collectionQuery(COLLECTIONS.join(' OR ')), sort: 'downloads desc' },
@@ -125,16 +136,20 @@ function getVideoSources(episodeUrl) {
   return _getJson(SITE + '/metadata/' + id).then(function (d) {
     var files = (d && d.files) || [];
     var out = [];
-    files.forEach(function (f) {
+    var playable = files.filter(function (f) { return PRIMARY.test(String(f.name || '')); });
+    // No MP4: fall back to other formats the player (mpv) also opens.
+    if (!playable.length) {
+      playable = files.filter(function (f) { return FALLBACK.test(String(f.name || '')); });
+    }
+    playable.forEach(function (f) {
       var name = String(f.name || '');
-      if (!/\.mp4$/i.test(name)) return;
       var url = SITE + '/download/' + id + '/' + encodeURIComponent(name).replace(/%2F/g, '/');
       var h = parseInt(f.height, 10);
       out.push({
         url: url,
         quality: h ? h + 'p' : (/512kb/i.test(name) ? '360p' : 'Original'),
         label: (f.format || 'MP4') + (f.size ? ' · ' + Math.round(f.size / 1048576) + ' MB' : ''),
-        container: 'mp4',
+        container: PRIMARY.test(name) ? 'mp4' : 'unknown',
         kind: 'unknown',
       });
     });

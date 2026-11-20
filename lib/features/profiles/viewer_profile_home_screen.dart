@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
+import '../../core/app_config.dart';
 import '../../core/cache/app_image_cache.dart';
 import '../../core/di/injector.dart';
 import '../../core/models/watch_status.dart';
@@ -15,7 +16,6 @@ import '../auth/auth_cubit.dart';
 import '../auth/auth_screens.dart' show ProfileAccountSection;
 import '../auth/pair_tv_screen.dart';
 import '../settings/settings_screen.dart';
-import '../settings/donate_screen.dart';
 import 'viewer_profile_editor_screen.dart';
 import 'viewer_profiles_screen.dart';
 
@@ -75,16 +75,6 @@ class ViewerProfileHomeScreen extends StatelessWidget {
                       )
                     : const SizedBox.shrink(),
               ),
-            ListTile(
-              leading: const Icon(Icons.favorite_outline_rounded),
-              title: const Text('Donate'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(builder: (_) => const DonateScreen()),
-                );
-              },
-            ),
           ],
         ),
       ),
@@ -94,13 +84,14 @@ class ViewerProfileHomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = context.select<AuthCubit, AuthState>((cubit) => cubit.state);
-    if (auth.status == AuthStatus.unknown) {
+    // ClearCut: no accounts, so the profile page never waits on sign-in.
+    if (kCloudEnabled && auth.status == AuthStatus.unknown) {
       return Scaffold(
         backgroundColor: AppColors.bg,
         body: Center(child: CircularProgressIndicator(color: AppColors.accent)),
       );
     }
-    if (!auth.isLoggedIn) {
+    if (kCloudEnabled && !auth.isLoggedIn) {
       return Scaffold(backgroundColor: AppColors.bg, body: _signedOut(context));
     }
 

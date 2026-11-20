@@ -24,6 +24,7 @@ import '../../core/ui/source_switcher.dart';
 import 'aniyomi_sources_screen.dart';
 import 'bloc/sources_state.dart';
 import 'cloudstream_sources_screen.dart';
+import 'extensions_library_screen.dart';
 import 'stremio_sources_screen.dart';
 import 'lnreader_sources_screen.dart';
 import 'mangayomi_sources_screen.dart';
@@ -189,6 +190,17 @@ class _HubPhoneView extends StatelessWidget {
             totalUpdates: totalUpdates,
           ),
           const SizedBox(height: 24),
+          // ClearCut: one place for every plugin in every added repository.
+          _EcoRow(
+            icon: Icons.library_add_rounded,
+            title: 'Extensions library',
+            desc: 'Browse, search and install everything from your repos',
+            info: 'Download all for movies, series, anime, manga and novels',
+            active: false,
+            updateCount: 0,
+            onTap: () => open(const ExtensionsLibraryScreen()),
+          ),
+          const SizedBox(height: 28),
           if (mangayomi != null) ...[
             const _SectionLabel('ALL'),
             const SizedBox(height: 12),
@@ -687,6 +699,13 @@ class _HubTvViewState extends State<_HubTvView> {
                   clipBehavior: Clip.none,
                   padding: const EdgeInsets.fromLTRB(40, 0, 40, 48),
                   children: [
+                    row(
+                      icon: Icons.library_add_rounded,
+                      title: 'Extensions library',
+                      subtitle: 'Install everything from your repos',
+                      tint: AppColors.accent,
+                      onTap: () => _open(const ExtensionsLibraryScreen()),
+                    ),
                     if (mangayomi != null)
                       row(
                         icon: Icons.extension_rounded,

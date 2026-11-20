@@ -2440,6 +2440,11 @@ class _DetailViewState extends State<_DetailView>
     final episodeNum = eps.isNotEmpty
         ? (eps[resumeIdx].number?.toInt() ?? resumeIdx + 1)
         : 1;
+    // TMDB id for the NoFlix ad-free web player (Android, video only). Play
+    // falls back to it when no source has episodes for this title.
+    final adFreeTmdbId = !isReading && Platform.isAndroid
+        ? (detail.tmdbId ?? item.tmdbId)
+        : null;
     final buttonLabel = isReading
         ? (readResume!.hasResume
               ? context.l10n.continueLabel
@@ -2764,8 +2769,18 @@ class _DetailViewState extends State<_DetailView>
                   icon: isReading
                       ? Icons.menu_book_rounded
                       : Icons.play_arrow_rounded,
+                  // Sources first: their native player is already ad-free and
+                  // keeps resume + downloads. When no source has this title,
+                  // Play opens the NoFlix ad-free web player by TMDB id.
                   onPressed: eps.isNotEmpty
                       ? () => _openPlayer(eps, resumeIdx, detail, category)
+                      : (adFreeTmdbId != null && !state.episodesLoading)
+                      ? () => _openNoFlix(
+                          tmdbId: adFreeTmdbId,
+                          isTv: detail.tmdbId != null
+                              ? detail.tmdbIsTv
+                              : item.tmdbIsTv,
+                        )
                       : null,
                 ),
               ),
@@ -2787,30 +2802,6 @@ class _DetailViewState extends State<_DetailView>
                             episodesBySeason: episodesBySeason,
                             initialSeason: currentSeason,
                           ),
-                  ),
-                ),
-              // NoFlix ad-free web player (Android). Keyed by TMDB id, so it
-              // works even when no ClearCut source matched this title.
-              if (!isReading &&
-                  Platform.isAndroid &&
-                  (detail.tmdbId ?? item.tmdbId) != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-                  child: _NoFlixButton(
-                    onPressed: () {
-                      final isTv = detail.tmdbId != null
-                          ? detail.tmdbIsTv
-                          : item.tmdbIsTv;
-                      final ep = isTv && resume.hasResume && eps.isNotEmpty
-                          ? eps[resumeIdx]
-                          : null;
-                      _openNoFlix(
-                        tmdbId: (detail.tmdbId ?? item.tmdbId)!,
-                        isTv: isTv,
-                        season: ep?.season,
-                        episode: ep?.number?.toInt(),
-                      );
-                    },
                   ),
                 ),
               // Z Mode: matched source + "Wrong title?", kept with the

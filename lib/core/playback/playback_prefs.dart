@@ -947,6 +947,14 @@ class PlaybackPrefs {
   /// Off by default; turning it on is gated behind a confirmation in Privacy
   /// settings. When off, NSFW sources are hidden from the source list + switcher.
   bool get nsfwSources => _box.get('nsfwSources', defaultValue: false) as bool;
+
+  /// ClearCut: Play opens the ad-free web player first for movies and series
+  /// that have a TMDB id, instead of searching sources. Off by default; anime,
+  /// manga and novels are unaffected.
+  bool get preferAdFreePlayer =>
+      _box.get('preferAdFreePlayer', defaultValue: false) as bool;
+  Future<void> setPreferAdFreePlayer(bool value) =>
+      _box.put('preferAdFreePlayer', value);
   Future<void> setNsfwSources(bool value) => _box.put('nsfwSources', value);
 
   /// Whether the metadata catalogues may return adult (18+) titles.

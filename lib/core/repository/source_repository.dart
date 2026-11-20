@@ -24,6 +24,7 @@ import '../models/media_item.dart';
 import '../models/page_content.dart';
 import '../models/video_source.dart';
 import '../playback/playback_prefs.dart';
+import '../playback/search_result_cache.dart';
 import '../playback/source_health_store.dart';
 import '../provider/base_provider.dart';
 import '../i18n/source_languages.dart';
@@ -58,7 +59,11 @@ class SourceRepository implements CatalogueRepository {
     // never picked a language set.
     MangaLangPrefs? mangaLangs,
     AnimeLangPrefs? animeLangs,
-  }) : _mangaLangs = mangaLangs,
+    // Optional so existing tests (and any non-DI construction) keep working.
+    // Null simply means "in-memory cache only", the pre-change behaviour.
+    SearchResultCache? searchResultCache,
+  }) : _searchResultCache = searchResultCache,
+       _mangaLangs = mangaLangs,
        _animeLangs = animeLangs,
        _manager = manager,
        _csManager = csManager,
@@ -89,6 +94,9 @@ class SourceRepository implements CatalogueRepository {
   final MangayomiManager? _mangayomiManager;
   final ActiveSourceCubit _active;
   final PlaybackPrefs _prefs;
+
+  /// Optional disk-backed search cache. See [SearchResultCache].
+  final SearchResultCache? _searchResultCache;
 
   /// Prefetch cache: `sourceId|episodeUrl` → an in-flight/complete fast
   /// resolution started on the detail screen, so "tap Play" reuses work already
@@ -151,6 +159,43 @@ class SourceRepository implements CatalogueRepository {
       _searchInflight.clear();
       _searchSourcesSig = sig;
     }
+  }
+
+  /// Instant results for [sourceIds] from memory or disk, for painting the
+  /// first frame while the live fan-out revalidates (FrameXTV's
+  /// "keep previous data" behaviour). Empty when nothing is cached yet.
+  ///
+  /// A fresh disk hit is promoted into the in-memory cache at its original
+  /// timestamp, so the live [searchStatus] call either reuses it (still inside
+  /// the 3-minute memory TTL) or refetches naturally (older than that).
+  List<({String sourceId, List<MediaItem> items})> cachedSearch(
+    String query, {
+    required Iterable<String> sourceIds,
+    String category = 'sub',
+    Map<String, String?> filters = const {},
+    int page = 1,
+  }) {
+    final out = <({String sourceId, List<MediaItem> items})>[];
+    for (final id in sourceIds) {
+      final key = _searchKey(id, query, category, filters[id], page);
+      final mem = _searchCache[key];
+      if (mem != null && DateTime.now().difference(mem.at) < _searchTtl) {
+        if (mem.items.isNotEmpty) out.add((sourceId: id, items: mem.items));
+        continue;
+      }
+      final disk = _searchResultCache?.read(key);
+      if (disk != null && _searchResultCache!.isFresh(disk.at)) {
+        _searchCache[key] = (
+          at: disk.at,
+          items: disk.items,
+          outcome: disk.outcome,
+        );
+        if (disk.items.isNotEmpty) {
+          out.add((sourceId: id, items: disk.items));
+        }
+      }
+    }
+    return out;
   }
 
   /// True for CloudStream source ids (`cs:<name>`), which route to the native
@@ -818,6 +863,17 @@ class SourceRepository implements CatalogueRepository {
     if (hit != null && DateTime.now().difference(hit.at) < _searchTtl) {
       return Future.value((items: hit.items, outcome: hit.outcome));
     }
+    // Disk tier: survives a cold start. Promote at the ORIGINAL timestamp so a
+    // nearly-expired disk entry still triggers a live refresh in memory.
+    final disk = _searchResultCache?.read(key);
+    if (disk != null && _searchResultCache!.isFresh(disk.at)) {
+      _searchCache[key] = (
+        at: disk.at,
+        items: disk.items,
+        outcome: disk.outcome,
+      );
+      return Future.value((items: disk.items, outcome: disk.outcome));
+    }
     final inflight = _searchInflight[key];
     if (inflight != null) return inflight; // share an already-running fetch
     final future =
@@ -836,6 +892,8 @@ class SourceRepository implements CatalogueRepository {
               items: res.items,
               outcome: res.outcome,
             );
+            // ignore: unawaited_futures
+            _searchResultCache?.write(key, res.items, res.outcome);
           }
           return res;
         });

@@ -886,6 +886,20 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
           SettingsSectionLabel(context.l10n.playback),
           SettingsCard(
             children: [
+              if (Platform.isAndroid)
+                _toggleRow(
+                  icon: Icons.shield_outlined,
+                  title: 'Prefer ad-free player',
+                  subtitle:
+                      'Play opens the ad-free web player first for movies and '
+                      'series, so they start right away. Sources are still '
+                      'used for anime and when you pick one yourself.',
+                  value: _prefs.preferAdFreePlayer,
+                  onChanged: (v) async {
+                    await _prefs.setPreferAdFreePlayer(v);
+                    if (mounted) setState(() {});
+                  },
+                ),
               _toggleRow(
                 icon: Icons.history_outlined,
                 title: context.l10n.resumePlayback,

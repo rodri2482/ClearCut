@@ -481,6 +481,10 @@ class _DetailViewState extends State<_DetailView>
   /// one, short enough that a viewer reading the page still gets the warm menu.
   static const Duration _prefetchStayDelay = Duration(milliseconds: 700);
 
+  /// Head start for a title no source has been matched to yet: a full source
+  /// search, so it waits a little longer than [_prefetchStayDelay].
+  static const Duration _prefetchSearchDelay = Duration(milliseconds: 1500);
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -703,32 +707,40 @@ class _DetailViewState extends State<_DetailView>
   /// reuses the work.
   ///
   /// Only start after the viewer has demonstrably stayed on the page. The
-  /// prefetch is scoped to the selected source; Z Mode only prefetches when a
-  /// source is already matched, so opening a detail page never starts an
-  /// Auto Resolve sweep across every installed provider.
+  /// prefetch is scoped to the selected source. In Z Mode a matched title is
+  /// warmed after [_prefetchStayDelay]; an unmatched one starts its Auto
+  /// Resolve search after the longer [_prefetchSearchDelay], so a quick
+  /// back-and-forth browse still never starts a sweep.
   void _maybePrefetch(String epUrl, String sourceId) {
     if (sourceId == stremioSourceId) return;
     if (_prefetchedEpUrl == epUrl) return;
     final zMode = sourceId == ZmodeIds.sourceId;
-    if (zMode && _zModeMatchedSource() == null) return;
+    // ClearCut: an unmatched title used to get no head start at all, so the
+    // whole source search began only when Play was pressed. Start it for those
+    // too, after a slightly longer stay (a search costs more than a warm-up),
+    // so the source is usually found before the viewer reaches Play.
+    final unmatched = zMode && _zModeMatchedSource() == null;
     _prefetchedEpUrl = epUrl;
     _prefetchTimer?.cancel();
-    _prefetchTimer = Timer(_prefetchStayDelay, () {
-      if (!mounted) return;
-      if (zMode) {
-        final matched = _zModeMatchedSource();
-        ProviderManager.inBackground(
-          () => sl<CatalogueRepository>().sources(
-            epUrl,
-            sourceId: matched?.sourceId ?? sourceId,
-            fast: true,
-          ),
-        ).catchError((_) => <VideoSource>[]);
-        return;
-      }
+    _prefetchTimer = Timer(
+      unmatched ? _prefetchSearchDelay : _prefetchStayDelay,
+      () {
+        if (!mounted) return;
+        if (zMode) {
+          final matched = _zModeMatchedSource();
+          ProviderManager.inBackground(
+            () => sl<CatalogueRepository>().sources(
+              epUrl,
+              sourceId: matched?.sourceId ?? sourceId,
+              fast: true,
+            ),
+          ).catchError((_) => <VideoSource>[]);
+          return;
+        }
 
-      sl<SourceRepository>().prefetch(epUrl, sourceId: sourceId);
-    });
+        sl<SourceRepository>().prefetch(epUrl, sourceId: sourceId);
+      },
+    );
   }
 
   /// The source already matched to this title, or null when none is — a local
@@ -2445,6 +2457,13 @@ class _DetailViewState extends State<_DetailView>
     final adFreeTmdbId = !isReading && Platform.isAndroid
         ? (detail.tmdbId ?? item.tmdbId)
         : null;
+    // Movies and series only: anime matches the ad-free site's TMDB ids less
+    // reliably, so anime keeps using sources even with the setting on.
+    final isAnime = ZmodeIds.parseShow(item.url)?.kind == ZKind.anime;
+    final preferAdFree =
+        adFreeTmdbId != null &&
+        !isAnime &&
+        sl<PlaybackPrefs>().preferAdFreePlayer;
     final buttonLabel = isReading
         ? (readResume!.hasResume
               ? context.l10n.continueLabel
@@ -2772,7 +2791,16 @@ class _DetailViewState extends State<_DetailView>
                   // Sources first: their native player is already ad-free and
                   // keeps resume + downloads. When no source has this title,
                   // Play opens the NoFlix ad-free web player by TMDB id.
-                  onPressed: eps.isNotEmpty
+                  // "Prefer ad-free player" (Settings → Playback) skips the
+                  // source search for movies and series entirely.
+                  onPressed: preferAdFree
+                      ? () => _openNoFlix(
+                          tmdbId: adFreeTmdbId,
+                          isTv: detail.tmdbId != null
+                              ? detail.tmdbIsTv
+                              : item.tmdbIsTv,
+                        )
+                      : eps.isNotEmpty
                       ? () => _openPlayer(eps, resumeIdx, detail, category)
                       : (adFreeTmdbId != null && !state.episodesLoading)
                       ? () => _openNoFlix(

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -43,12 +44,38 @@ class StreamProbe {
   Future<List<VideoSource>> liveStreams(List<VideoSource> streams) async {
     if (streams.isEmpty) return streams;
     final probed = streams.take(maxProbed).toList();
-    final results = await Future.wait(probed.map(isAlive));
+    final alive = List<bool?>.filled(probed.length, null);
+    final done = Completer<void>();
+    var finished = 0;
+    Timer? grace;
+
+    void finish() {
+      grace?.cancel();
+      if (!done.isCompleted) done.complete();
+    }
+
+    for (var i = 0; i < probed.length; i++) {
+      isAlive(probed[i]).then((ok) {
+        alive[i] = ok;
+        finished++;
+        if (finished == probed.length) {
+          finish();
+        } else if (ok) {
+          // ClearCut: once one link is confirmed, wait only briefly for the
+          // rest instead of for the slowest dead link's full timeout.
+          grace ??= Timer(firstHitGrace, finish);
+        }
+      });
+    }
+    await done.future;
     return [
       for (var i = 0; i < probed.length; i++)
-        if (results[i]) probed[i],
+        if (alive[i] == true) probed[i],
     ];
   }
+
+  /// How long to keep waiting for other links after the first one passes.
+  static const Duration firstHitGrace = Duration(milliseconds: 1200);
 
   /// True when [s] looks playable. Links that can't be checked over plain
   /// HTTP (torrents, DRM, non-http schemes) are trusted as before.

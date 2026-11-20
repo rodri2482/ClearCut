@@ -4,7 +4,7 @@ import 'package:hive/hive.dart';
 import 'package:watch_app/core/hive/safe_box.dart';
 
 import '../models/media_item.dart';
-import 'incognito_mode.dart';
+import '../privacy/incognito_mode.dart';
 import 'source_health_store.dart' show SourceOutcome;
 
 /// Disk-backed search results — ClearCut's version of FrameXTV's React-Query

@@ -44,6 +44,7 @@ import '../profiles/profile_lock_store.dart';
 import '../profiles/profile_lock_remote.dart';
 import '../profiles/synced_profile_lock_store.dart';
 import '../profiles/profile_avatar_uploader.dart';
+import '../search/local_title_index.dart';
 import '../search/title_suggestion_service.dart';
 import '../ui/animation_prefs.dart';
 import '../ui/detail_prefs.dart';
@@ -63,6 +64,7 @@ import '../share/open_link_service.dart';
 import '../provider/provider_registry.dart';
 import '../provider/provider_repo_registry.dart';
 import '../repository/catalogue_repository.dart';
+import '../repository/host_mirrors.dart';
 import '../repository/provider_settings_repository.dart';
 import '../repository/source_domain_overrides.dart';
 import '../stremio/stremio_manager.dart';
@@ -472,6 +474,11 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   // after a cold start instead of re-hitting every installed source.
   await SearchResultCache.init();
   sl.registerSingleton<SearchResultCache>(SearchResultCache());
+  // On-device title index: answers a query from titles the app has already
+  // seen, so the first frame has content without waiting on any source.
+  sl.registerSingleton<LocalTitleIndex>(await LocalTitleIndex.open());
+  // Ordered mirror pool per source; rotates after repeated hard failures.
+  sl.registerSingleton<HostMirrors>(await HostMirrors.open());
   await AnimationPrefs.init(); // list/grid reveal toggle (phone/iOS only)
   await DetailPrefs.init(); // episode lists open reversed when enabled
   await IncognitoMode.init(); // privacy: pause history/tracking/RPC when on
@@ -811,6 +818,27 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   } catch (e) {
     debugPrint('[builtin] Gutenberg source failed to load: $e');
   }
+  // ClearCut built-in text source (Wikisource, public domain). Same lifecycle
+  // as Gutenberg: stored as an LNReader plugin, refreshed every launch.
+  try {
+    await Hive.box<Map>(LnReaderExtensionService.boxName).put(
+      'clearcut_wikisource',
+      {
+        'id': 'clearcut_wikisource',
+        'name': 'Wikisource (free texts)',
+        'site': 'https://en.wikisource.org',
+        'lang': 'English',
+        'version': '1.0.0',
+        'url': 'bundled://clearcut_wikisource',
+        'iconUrl': 'https://en.wikisource.org/favicon.ico',
+        'js': await rootBundle.loadString(
+          'assets/builtin_sources/wikisource_texts.js',
+        ),
+      },
+    );
+  } catch (e) {
+    debugPrint('[builtin] Wikisource source failed to load: $e');
+  }
   // Repo-URL box too, so Backup's sync build() can read it any time — the
   // novel twin of the mihon_repos/aniyomi_repos opens below. Unlike those
   // (opened inside a guarded, Android-only microtask), LNReader has no
@@ -893,6 +921,7 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
     ('clearcut_nasa', 'nasa_video.js', 'NASA (free space videos)'),
     ('clearcut_wikimedia', 'wikimedia_video.js', 'Wikimedia Commons (free films)'),
     ('clearcut_blender', 'blender_movies.js', 'Blender Open Movies'),
+    ('clearcut_prelinger', 'prelinger_films.js', 'Prelinger Archives (free film)'),
   ]) {
     try {
       await registry.installFromBundled(
@@ -1194,6 +1223,7 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
       mangaLangs: mangaLangPrefs,
       animeLangs: animeLangPrefs,
       searchResultCache: sl<SearchResultCache>(),
+      titleIndex: sl<LocalTitleIndex>(),
     ),
   );
 

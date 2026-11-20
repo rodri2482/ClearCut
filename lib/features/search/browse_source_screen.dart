@@ -14,6 +14,7 @@ import '../../core/stremio/stremio_ref.dart';
 import '../../core/repository/source_actions.dart' as source_actions;
 import '../../core/provider/cf_solve_needed.dart';
 import '../../core/repository/source_domain_overrides.dart';
+import '../../core/repository/host_mirrors.dart';
 import '../../core/repository/source_repository.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text.dart';
@@ -323,25 +324,50 @@ class _BrowseSourceViewState extends State<_BrowseSourceView> {
   /// "open in browser" and the Cloudflare solve.
   Future<void> _editDomain() async {
     final store = sl<SourceDomainOverrides>();
+    final mirrorsStore = sl<HostMirrors>();
     final controller = TextEditingController(
       text: store.get(widget.sourceId) ?? _baseUrl,
+    );
+    final mirrorsController = TextEditingController(
+      text: mirrorsStore.mirrors(widget.sourceId).join('\n'),
     );
     final saved = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(dialogContext.l10n.sourceDomain),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: TextInputType.url,
-          decoration: InputDecoration(
-            hintText: dialogContext.l10n.sourceDomainHint,
-          ),
-          onSubmitted: (_) => Navigator.of(dialogContext).pop(true),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              decoration: InputDecoration(
+                hintText: dialogContext.l10n.sourceDomainHint,
+              ),
+              onSubmitted: (_) => Navigator.of(dialogContext).pop(true),
+            ),
+            const SizedBox(height: 16),
+            // The pool is what makes an outage survivable without editing
+            // anything again: after two hard failures the app switches to the
+            // next domain on its own. First line is the one in use.
+            TextField(
+              controller: mirrorsController,
+              keyboardType: TextInputType.multiline,
+              maxLines: 4,
+              minLines: 2,
+              decoration: const InputDecoration(
+                labelText: 'Backup domains',
+                hintText: 'One per line — the first is used now, '
+                    'the rest rotate in automatically',
+                alignLabelWithHint: true,
+              ),
+            ),
+          ],
         ),
         actions: [
-          // Reset clears the override; it does not blank the site, it hands
-          // the source back to whatever domain the extension reports.
+          // Reset clears the override and the pool; it does not blank the site,
+          // it hands the source back to whatever domain the extension reports.
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
             child: Text(dialogContext.l10n.reset),
@@ -357,12 +383,19 @@ class _BrowseSourceViewState extends State<_BrowseSourceView> {
         ],
       ),
     );
+    final mirrorsText = mirrorsController.text;
     controller.dispose();
+    mirrorsController.dispose();
     if (saved == null) return; // cancelled
     if (saved) {
       await store.set(widget.sourceId, controller.text);
+      await mirrorsStore.setMirrors(
+        widget.sourceId,
+        mirrorsText.split(RegExp(r'[\r\n,]+')),
+      );
     } else {
       await store.clear(widget.sourceId);
+      await mirrorsStore.clear(widget.sourceId);
     }
     if (mounted) setState(() {}); // the menu's gating reads _baseUrl
   }

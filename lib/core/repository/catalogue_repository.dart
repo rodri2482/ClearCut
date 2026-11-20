@@ -16,17 +16,6 @@ abstract interface class CatalogueRepository {
   String displayName(String sourceId);
   void syncSearchCache();
 
-  /// Instant results for first-frame display while a live search revalidates.
-  /// Implementers backed by a persisted cache override this; the default keeps
-  /// other catalogues (tests, metadata-only mode) unchanged.
-  List<({String sourceId, List<MediaItem> items})> cachedSearch(
-    String query, {
-    required Iterable<String> sourceIds,
-    String category = 'sub',
-    Map<String, String?> filters = const {},
-    int page = 1,
-  }) => const <({String sourceId, List<MediaItem> items})>[];
-
   Future<List<HomeSection>> home({String category = 'sub', String? sourceId});
 
   Future<List<MediaItem>> search(
@@ -89,5 +78,32 @@ abstract interface class CatalogueRepository {
   Future<({List<VideoSource> sources, bool done})> polledSources(
     String episodeUrl, {
     String? sourceId,
+  });
+}
+
+/// Optional capability: a catalogue that can answer a query from LOCAL data
+/// before any network call finishes.
+///
+/// Kept OUT of [CatalogueRepository] on purpose. That is an `interface class`,
+/// so a member added there must be declared by every implementer — including
+/// [MetadataRepository], [CatalogueRouter] and a dozen test fakes that have no
+/// business owning a disk cache. A sibling interface lets the search BLoC ask
+/// "can you do this?" once and leave everyone else untouched.
+abstract interface class InstantSearchSource {
+  /// Per-source results for [query] already on this device (memory or disk).
+  List<({String sourceId, List<MediaItem> items})> cachedSearch(
+    String query, {
+    required Iterable<String> sourceIds,
+    String category = 'sub',
+    Map<String, String?> filters = const {},
+    int page = 1,
+  });
+
+  /// Titles matching [query] seen from any source before, from the on-device
+  /// title index.
+  List<MediaItem> indexedSearch(
+    String query, {
+    required Iterable<String> sourceIds,
+    int limit = 24,
   });
 }

@@ -12,6 +12,7 @@ import '../../../core/playback/search_prefs.dart';
 import '../../../core/playback/search_source_prefs.dart';
 import '../../../core/playback/source_health_store.dart';
 import '../../../core/repository/catalogue_repository.dart';
+import '../../../core/repository/host_mirrors.dart';
 import '../../../core/search/title_suggestion_service.dart';
 import '../../../core/state/active_source_cubit.dart';
 import '../../../core/stremio/stremio_provider.dart';
@@ -520,31 +521,56 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     // already keeps a new source out of the cache; this covers removes too).
     _repo.syncSearchCache();
 
-    // FrameXTV-style "keep previous data": paint cached results on the very
-    // first frame while the live fan-out revalidates. A repeat query needs no
-    // network wait at all. These are a transient first frame only — `acc`
-    // below stays empty so a live response replaces them instead of appending
-    // a duplicate section for the same source.
-    final cached = _repo.cachedSearch(
-      q,
-      sourceIds: sources.map((s) => s.id),
-      filters: {for (final s in sources) s.id: state.filterSelectionFor(s.id)},
-    );
-    if (cached.isNotEmpty) {
-      final names = {for (final s in sources) s.id: s.name};
-      emit(
-        state.copyWith(
-          status: SearchStatus.success,
-          groups: [
-            for (var i = 0; i < cached.length; i++)
-              SourceResultGroup(
-                sourceId: cached[i].sourceId,
-                sourceName: names[cached[i].sourceId] ?? cached[i].sourceId,
-                items: cached[i].items,
-                arrivalIndex: i,
-              ),
-          ],
+    // FrameXTV-style "keep previous data": paint something on the very first
+    // frame while the live fan-out revalidates. Two sources of instant truth:
+    //   * [cachedSearch]  — this exact query, already fetched on this device.
+    //   * [indexedSearch] — ANY previously seen title matching the query. This
+    //     is what makes a FIRST search of a familiar show feel immediate.
+    // Instant groups are transient: each one is replaced the moment its own
+    // source answers, so nothing is duplicated.
+    final sourceIds = <String>[for (final s in sources) s.id];
+    final names = {for (final s in sources) s.id: s.name};
+    final instant = _repo is InstantSearchSource
+        ? _repo as InstantSearchSource
+        : null;
+    final cached =
+        instant?.cachedSearch(
+          q,
+          sourceIds: sourceIds,
+          filters: {
+            for (final s in sources) s.id: state.filterSelectionFor(s.id),
+          },
+        ) ??
+        const <({String sourceId, List<MediaItem> items})>[];
+    final cachedIds = {for (final c in cached) c.sourceId};
+    final indexed = <String, List<MediaItem>>{};
+    final indexHits =
+        instant?.indexedSearch(q, sourceIds: sourceIds, limit: 30) ??
+        const <MediaItem>[];
+    for (final item in indexHits) {
+      if (cachedIds.contains(item.sourceId)) continue;
+      (indexed[item.sourceId] ??= <MediaItem>[]).add(item);
+    }
+    var instantRank = 0;
+    final instantGroups = <SourceResultGroup>[
+      for (var i = 0; i < cached.length; i++)
+        SourceResultGroup(
+          sourceId: cached[i].sourceId,
+          sourceName: names[cached[i].sourceId] ?? cached[i].sourceId,
+          items: cached[i].items,
+          arrivalIndex: instantRank++,
         ),
+      for (final entry in indexed.entries)
+        SourceResultGroup(
+          sourceId: entry.key,
+          sourceName: names[entry.key] ?? entry.key,
+          items: entry.value,
+          arrivalIndex: instantRank++,
+        ),
+    ];
+    if (instantGroups.isNotEmpty) {
+      emit(
+        state.copyWith(status: SearchStatus.success, groups: instantGroups),
       );
     }
 
@@ -561,6 +587,18 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     // Which sources broke, and how. Was a single `anyError` bool, which threw
     // away the one thing the UI needed to explain itself.
     final failed = <String, SourceOutcome>{...state.failedSources};
+    // Live results first, then any instant group whose source hasn't answered
+    // yet. Recomputing this on every emit is what keeps early content on screen
+    // instead of blanking the page when the first source lands.
+    List<SourceResultGroup> mergedGroups() {
+      final live = {for (final g in acc) g.sourceId};
+      return [
+        ...acc,
+        for (final g in instantGroups)
+          if (!live.contains(g.sourceId)) g,
+      ];
+    }
+
     // Monotonic arrival counter: the Nth source to return non-empty results gets
     // arrivalIndex N, so sections render fastest-first (CloudStream-style).
     var arrived = 0;
@@ -594,6 +632,18 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
           }
           // ignore: unawaited_futures
           health.record(s.id, outcome, responseMs: sw.elapsedMilliseconds);
+          // Mirror rotation: a live response clears the failure streak; a hard
+          // failure counts toward switching this source to its next domain. A
+          // pool of one is a no-op, so sources with no backup stay untouched.
+          if (sl.isRegistered<HostMirrors>()) {
+            final mirrors = sl<HostMirrors>();
+            if (responded) {
+              mirrors.noteSuccess(s.id);
+            } else {
+              // ignore: unawaited_futures
+              mirrors.noteFailure(s.id);
+            }
+          }
           if (!responded && outcome != SourceOutcome.slow) {
             failed[s.id] = outcome;
           }
@@ -609,7 +659,7 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
             emit(
               state.copyWith(
                 status: SearchStatus.success,
-                groups: List.of(acc),
+                groups: mergedGroups(),
                 respondedSources: {...state.respondedSources, s.id},
                 failedSources: Map.of(failed),
               ),
@@ -644,7 +694,12 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
     // Don't wait for the 60s tail. The per-source closures keep running past
     // this point and emit their groups as they land, so slow sources no longer
     // hold the first result hostage.
-    await fanout.timeout(fastWaveBudget, onTimeout: () => <void>[]);
+    try {
+      await fanout.timeout(fastWaveBudget);
+    } on TimeoutException {
+      // Budget spent: fall through and finalize with what has landed. The
+      // per-source closures keep running and emit their groups when they do.
+    }
 
     if (isClosed || gen != _runGen) return;
     // Finalize: if nothing came back, surface error-or-empty appropriately.
@@ -655,13 +710,17 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
       (s) =>
           !state.respondedSources.contains(s.id) && !failed.containsKey(s.id),
     );
+    final groupsNow = mergedGroups();
     if (acc.isEmpty) {
       emit(
         state.copyWith(
-          status: failed.isNotEmpty && !pending
+          // Instant content is a real result set, not an empty search.
+          status: groupsNow.isNotEmpty
+              ? SearchStatus.success
+              : failed.isNotEmpty && !pending
               ? SearchStatus.error
               : SearchStatus.success,
-          groups: const [],
+          groups: groupsNow,
           failedSources: Map.of(failed),
         ),
       );
@@ -669,7 +728,7 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
       emit(
         state.copyWith(
           status: SearchStatus.success,
-          groups: List.of(acc),
+          groups: groupsNow,
           failedSources: Map.of(failed),
         ),
       );

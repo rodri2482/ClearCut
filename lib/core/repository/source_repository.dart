@@ -26,6 +26,8 @@ import '../models/video_source.dart';
 import '../playback/playback_prefs.dart';
 import '../playback/search_result_cache.dart';
 import '../playback/source_health_store.dart';
+import '../search/local_title_index.dart';
+import 'host_mirrors.dart';
 import '../provider/base_provider.dart';
 import '../i18n/source_languages.dart';
 import '../prefs/source_lang_prefs.dart';
@@ -44,7 +46,7 @@ import 'source_domain_overrides.dart';
 /// Facade over the active provider runtime for the UI layer.
 /// The active source is driven by [activeSource] so callers can switch at
 /// runtime without recreating the repository.
-class SourceRepository implements CatalogueRepository {
+class SourceRepository implements CatalogueRepository, InstantSearchSource {
   SourceRepository({
     required ProviderManager manager,
     required CloudStreamManager csManager,
@@ -62,7 +64,11 @@ class SourceRepository implements CatalogueRepository {
     // Optional so existing tests (and any non-DI construction) keep working.
     // Null simply means "in-memory cache only", the pre-change behaviour.
     SearchResultCache? searchResultCache,
+    // Optional for the same reason: null means "no local index", which is the
+    // pre-change behaviour everywhere the injector isn't in play.
+    LocalTitleIndex? titleIndex,
   }) : _searchResultCache = searchResultCache,
+       _titleIndex = titleIndex,
        _mangaLangs = mangaLangs,
        _animeLangs = animeLangs,
        _manager = manager,
@@ -97,6 +103,9 @@ class SourceRepository implements CatalogueRepository {
 
   /// Optional disk-backed search cache. See [SearchResultCache].
   final SearchResultCache? _searchResultCache;
+
+  /// Optional on-device title index. See [LocalTitleIndex].
+  final LocalTitleIndex? _titleIndex;
 
   /// Prefetch cache: `sourceId|episodeUrl` → an in-flight/complete fast
   /// resolution started on the detail screen, so "tap Play" reuses work already
@@ -197,6 +206,26 @@ class SourceRepository implements CatalogueRepository {
       }
     }
     return out;
+  }
+
+  /// Instant matches from the on-device title index — titles any source has
+  /// already returned, for any query, without touching the network.
+  ///
+  /// This is what makes a FIRST search of a familiar title feel immediate: the
+  /// live fan-out still runs and still wins, but the screen is never empty
+  /// while it does.
+  @override
+  List<MediaItem> indexedSearch(
+    String query, {
+    required Iterable<String> sourceIds,
+    int limit = 24,
+  }) {
+    return _titleIndex?.search(
+          query,
+          sourceIds: sourceIds,
+          limit: limit,
+        ) ??
+        const <MediaItem>[];
   }
 
   /// True for CloudStream source ids (`cs:<name>`), which route to the native
@@ -527,10 +556,17 @@ class SourceRepository implements CatalogueRepository {
   /// rather than the constructor so the many `implements SourceRepository`
   /// fakes don't all have to grow a parameter; guarded on registration so a
   /// test that never registers the store behaves exactly as before.
-  String? _domainOverride(String sourceId) =>
-      sl.isRegistered<SourceDomainOverrides>()
-      ? sl<SourceDomainOverrides>().get(sourceId)
-      : null;
+  String? _domainOverride(String sourceId) {
+    // An active mirror from the pool outranks a single hand-set domain: the
+    // pool is the whole list, and its head is what rotation last settled on.
+    if (sl.isRegistered<HostMirrors>()) {
+      final mirror = sl<HostMirrors>().active(sourceId);
+      if (mirror != null) return mirror;
+    }
+    return sl.isRegistered<SourceDomainOverrides>()
+        ? sl<SourceDomainOverrides>().get(sourceId)
+        : null;
+  }
 
   /// Best-effort language code for a source (e.g. "en"), or null when the
   /// ecosystem doesn't report one. Only Aniyomi and Mihon carry a declared
@@ -728,6 +764,11 @@ class SourceRepository implements CatalogueRepository {
 
     final sections = await provider.getHome(category: category);
     if (sections != null) {
+      // Home rows are the cheapest way to widen the local index: a source the
+      // user actually browses contributes ~100 searchable titles per load.
+      for (final s in sections) {
+        _titleIndex?.indexItems(s.items);
+      }
       return sections.where((s) => s.items.isNotEmpty).toList();
     }
 
@@ -748,6 +789,9 @@ class SourceRepository implements CatalogueRepository {
       HomeSection(title: 'Popular This Month', items: results[1]),
       HomeSection(title: 'All-Time Favorites', items: results[2]),
     ];
+    for (final s in fallback) {
+      _titleIndex?.indexItems(s.items);
+    }
     return fallback.where((s) => s.items.isNotEmpty).toList();
   }
 
@@ -895,6 +939,9 @@ class SourceRepository implements CatalogueRepository {
             );
             // ignore: unawaited_futures
             _searchResultCache?.write(key, res.items, res.outcome);
+            // Every title a real source returned becomes instant local
+            // knowledge — the seed of the local index, at no extra request.
+            _titleIndex?.indexItems(res.items);
           }
           return res;
         });

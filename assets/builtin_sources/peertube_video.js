@@ -26,9 +26,13 @@ function _getJson(url) {
 }
 
 // One instance failing must not hide the others.
-function _list(instance, count, page) {
+function _list(instance, count, page, term) {
   var start = Math.max(0, ((page || 1) - 1) * (count || 30));
   var url = instance + '/api/v1/videos?count=' + (count || 30) + '&start=' + start;
+  // PeerTube's own search parameter works on /videos (the /search route
+  // rejects unauthenticated calls on several public instances). Using it
+  // server-side finds videos the first 60 recent uploads would never contain.
+  if (term) url += '&search=' + encodeURIComponent(term);
   return _getJson(url).then(
     function (d) { return (d && d.data) || []; },
     function () { return []; }
@@ -112,11 +116,8 @@ function search(query, page, opts) {
   var q = String(query || '').toLowerCase().trim();
   if (!q) return popular(opts);
   return Promise.all(INSTANCES.map(function (instance) {
-    return _list(instance, 60, 1).then(function (data) {
-      return data.filter(function (v) {
-        return String(v.name || '').toLowerCase().indexOf(q) >= 0 ||
-          String((v.channel && v.channel.displayName) || '').toLowerCase().indexOf(q) >= 0;
-      }).map(function (v) { return _item(v, instance); });
+    return _list(instance, 40, page, q).then(function (data) {
+      return data.map(function (v) { return _item(v, instance); });
     });
   })).then(function (all) {
     return [].concat.apply([], all);

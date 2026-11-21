@@ -63,6 +63,8 @@ var ROWS = [
   { id: 'noir', title: 'Film noir', q: _collectionQuery('film_noir'), sort: 'downloads desc' },
   { id: 'comedy', title: 'Comedy', q: _collectionQuery('Comedy_Films'), sort: 'downloads desc' },
   { id: 'silent', title: 'Silent era', q: _collectionQuery('silent_films'), sort: 'downloads desc' },
+  { id: 'animation', title: 'Animation & cartoons', q: _collectionQuery('animation'), sort: 'downloads desc' },
+  { id: 'classicTv', title: 'Classic television', q: _collectionQuery('classic_tv'), sort: 'downloads desc' },
   { id: 'recent', title: 'Recently added', q: _collectionQuery(COLLECTIONS.join(' OR ')), sort: 'addeddate desc' },
 ];
 
@@ -90,9 +92,16 @@ function popular(opts) {
 }
 
 function search(query, page, opts) {
-  var q = 'title:(' + String(query || '').replace(/[()":]/g, ' ') + ') AND ' +
-    _collectionQuery(COLLECTIONS.join(' OR '));
-  return _search(q, 'downloads desc', page, 40);
+  var term = String(query || '').replace(/[()":]/g, ' ').trim();
+  var scope = _collectionQuery(COLLECTIONS.join(' OR '));
+  return _search('title:(' + term + ') AND ' + scope, 'downloads desc', page, 40)
+    .then(function (items) {
+      // Many archive items file the title only in the subject/collection
+      // description. A second query there costs nothing when the title search
+      // already found something.
+      if (items.length) return items;
+      return _search('subject:(' + term + ') AND ' + scope, 'downloads desc', page, 40);
+    });
 }
 
 function _idFromUrl(url) {

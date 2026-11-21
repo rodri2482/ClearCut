@@ -688,6 +688,11 @@ class PlaybackResolver {
 
     var hadTitleMatch = false;
 
+    /// Sources that recognised the title but failed later (episode list or
+    /// streams). Their expensive searches are now cached, so a second ask can
+    /// rescue a title the viewer would otherwise have to press Retry for.
+    final matchedSources = <String>{};
+
     // One candidate, start to finish — same body as [_resolve]'s `ask`, minus
     // the download branch: progressive is always the foreground wait.
     var checked = 0;
@@ -709,7 +714,10 @@ class PlaybackResolver {
           // the player picks up those later links through pollSources.
           fast: true,
           category: category,
-          onTitleMatch: () => hadTitleMatch = true,
+          onTitleMatch: () {
+            hadTitleMatch = true;
+            matchedSources.add(sourceId);
+          },
           onMiss: (reason) => note(sourceId, reason),
         ).timeout(budget);
         // Stop WAITING when the viewer leaves; the answer underneath is
@@ -778,6 +786,35 @@ class PlaybackResolver {
       );
     }
 
+    /// Ask a set of candidates together and return their events in candidate
+    /// order. The automatic second chance below uses the exact same
+    /// attribution/ordering rules as the main sweep.
+    Future<List<ProgressiveResolve>> runWave(List<String> wave) async {
+      final pending = <String, Future<_Attempt?>>{
+        for (final id in wave) id: ask(id),
+      };
+      final verdicts = <String, _Attempt?>{};
+      final events = <ProgressiveResolve>[];
+      var cursor = 0;
+      while (verdicts.length < pending.length) {
+        final landed = await Future.any([
+          for (final entry in pending.entries)
+            if (!verdicts.containsKey(entry.key))
+              entry.value.then<({String id, _Attempt? attempt})>(
+                (a) => (id: entry.key, attempt: a),
+              ),
+        ]);
+        verdicts[landed.id] = landed.attempt;
+        if (gen != _sweepGen) throw const PlaybackAborted();
+        while (cursor < wave.length && verdicts.containsKey(wave[cursor])) {
+          final id = wave[cursor++];
+          final attempt = verdicts[id];
+          if (attempt != null) events.add(await recordHit(attempt));
+        }
+      }
+      return events;
+    }
+
     // A manually selected source is the whole playback resolution, not merely
     // the first wave. Finish after its fast links; the player's poll path still
     // collects late mirrors belonging to this same winning provider.
@@ -799,9 +836,14 @@ class PlaybackResolver {
     final remembered = selectedSource == null
         ? _rememberedPlaybackSource(p.show, ordered)
         : null;
+    // "All" means all AT ONCE, not twenty-three serial waves of three: on a
+    // device with dozens of sources the old wave size cost 20+ seconds before
+    // Play could even look at a source near the bottom of the list.
+    final allSources = _sweepCap(p.show.kind) == SourceOrderPrefs.allSourcesCap;
     for (final candidates in _candidateWaves(
       selectedSource == null ? ordered : const <String>[],
-      firstAlone: remembered != null,
+      firstAlone: remembered != null && !allSources,
+      waveSize: allSources ? ordered.length : null,
     )) {
       // Same bargain as [_resolve]: a wave already in flight cannot be
       // recalled, so leaving stops the NEXT wave, not this one.
@@ -836,35 +878,8 @@ class PlaybackResolver {
       // Asked at once, yielded in candidate order: every landing is parked by
       // candidate id and the wave drains from the front, so a hit is yielded
       // only once all higher-priority candidates in the wave have answered.
-      final pending = <String, Future<_Attempt?>>{
-        for (final id in wave) id: ask(id),
-      };
-      final verdicts = <String, _Attempt?>{};
-      var cursor = 0;
-      while (verdicts.length < pending.length) {
-        // Fresh wrappers each round over the same ask futures; the landed
-        // VALUE carries its candidate id, so attribution can never slip no
-        // matter how many asks complete in the same microtask. Keyed by
-        // candidate id — never by list position.
-        final landed = await Future.any([
-          for (final entry in pending.entries)
-            if (!verdicts.containsKey(entry.key))
-              entry.value.then<({String id, _Attempt? attempt})>(
-                (a) => (id: entry.key, attempt: a),
-              ),
-        ]);
-        verdicts[landed.id] = landed.attempt;
-        // Same post-wait check as [_resolve]: the wave races the abort
-        // signal, so a null here may mean the viewer left, not a miss.
-        if (gen != _sweepGen) {
-          throw const PlaybackAborted();
-        }
-        while (cursor < wave.length && verdicts.containsKey(wave[cursor])) {
-          final id = wave[cursor++];
-          final attempt = verdicts[id];
-          if (attempt == null) continue;
-          yield await recordHit(attempt);
-        }
+      for (final event in await runWave(wave)) {
+        yield event;
       }
       // A remembered show needs only its own source's mirrors; polling still
       // collects late links. A failed remembered source falls through normally.
@@ -872,6 +887,27 @@ class PlaybackResolver {
           (stopAfterFirstWave ||
               (remembered != null && candidates.singleOrNull == remembered))) {
         break;
+      }
+    }
+
+    // Automatic Retry. A source can recognise the title and still fail on its
+    // first stream lookup — a cold CDN, a slow extractor, a transient 403. The
+    // viewer used to have to press Retry for those: the second ask was fast
+    // because the title/episode searches were already cached. Do that second
+    // ask here, before declaring failure, with the same ordering guarantees.
+    if (firstHit == null && matchedSources.isNotEmpty && gen == _sweepGen) {
+      final retry = ordered
+          .where((id) => matchedSources.contains(id) && !dead.contains(id))
+          .toList();
+      if (retry.isNotEmpty) {
+        debugPrint(
+          '[playback] second attempt for ${retry.length} matched source(s) of '
+          '$zmEpisodeUrl — title lookups are cached',
+        );
+        for (final event in await runWave(retry)) {
+          yield event;
+        }
+        if (gen != _sweepGen) throw const PlaybackAborted();
       }
     }
 
@@ -1911,14 +1947,16 @@ class PlaybackResolver {
   Iterable<List<String>> _candidateWaves(
     List<String> ordered, {
     bool firstAlone = false,
+    int? waveSize,
   }) sync* {
+    final size = waveSize ?? sweepWaveSize;
     var start = 0;
     if (firstAlone && ordered.isNotEmpty) {
       yield [ordered.first];
       start = 1;
     }
-    for (; start < ordered.length; start += sweepWaveSize) {
-      yield ordered.skip(start).take(sweepWaveSize).toList();
+    for (; start < ordered.length; start += size) {
+      yield ordered.skip(start).take(size).toList();
     }
   }
 

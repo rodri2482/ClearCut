@@ -11,6 +11,7 @@ class SourceMatch {
     required this.showId,
     required this.showTitle,
     required this.pinned,
+    this.at = 0,
   });
 
   final String sourceId;
@@ -22,12 +23,17 @@ class SourceMatch {
   /// by a guess.
   final bool pinned;
 
+  /// When this match was saved. Lets [MatchStore.bestFor] pick the source
+  /// Auto Resolve just found rather than an arbitrary earlier guess.
+  final int at;
+
   Map<String, dynamic> toMap() => {
     'sourceId': sourceId,
     'showUrl': showUrl,
     'showId': showId,
     'showTitle': showTitle,
     'pinned': pinned,
+    'at': at,
   };
 
   static SourceMatch? fromMap(dynamic m) {
@@ -40,6 +46,7 @@ class SourceMatch {
       showId: m['showId'] is String ? m['showId'] as String : '',
       showTitle: m['showTitle'] is String ? m['showTitle'] as String : '',
       pinned: m['pinned'] == true,
+      at: m['at'] is int ? m['at'] as int : 0,
     );
   }
 }
@@ -80,7 +87,12 @@ class MatchStore {
   /// for this title.
   Future<void> save(ZCanonical c, SourceMatch m) async {
     if (get(c, m.sourceId)?.pinned == true) return;
-    await _box.put(_key(c, m.sourceId), m.toMap());
+    // Stamp every fresh guess so bestFor() can tell the match Auto Resolve
+    // just found from an older guess for the same title.
+    await _box.put(_key(c, m.sourceId), {
+      ...m.toMap(),
+      'at': DateTime.now().millisecondsSinceEpoch,
+    });
   }
 
   /// The user's choice for [m.sourceId]. Always wins for that source, and is
@@ -152,6 +164,7 @@ class MatchStore {
   SourceMatch? bestFor(ZCanonical c) {
     final prefix = '${c.key}@';
     final last = lastPlayed(c);
+    SourceMatch? newest;
     SourceMatch? played;
     SourceMatch? any;
     for (final k in _box.keys) {
@@ -161,8 +174,11 @@ class MatchStore {
       if (m.pinned) return m;
       if (last != null && m.sourceId == last) played ??= m;
       any ??= m;
+      if (newest == null || m.at >= newest.at) newest = m;
     }
-    return played ?? any;
+    // The freshest Auto Resolve answer is what the viewer just saw on Detail.
+    if (newest != null && newest.at > 0) return newest;
+    return played ?? newest ?? any;
   }
 
   Future<void> forget(ZCanonical c, String sourceId) =>

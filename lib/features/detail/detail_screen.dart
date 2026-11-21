@@ -1689,6 +1689,11 @@ class _DetailViewState extends State<_DetailView>
     }
     if (!mounted) return;
 
+    // Hand the exact source Auto Resolve just found to the player. Going
+    // through the normal `zm` router would make the player match the title
+    // again and could land on a different, older guess for the same show.
+    final playSourceId =
+        _zModeMatchedSource()?.sourceId ?? widget.item.sourceId;
     Navigator.of(context)
         .push(
           episodePlayerRoute(
@@ -1710,7 +1715,7 @@ class _DetailViewState extends State<_DetailView>
               resume: sl<ResumeStore>(),
               resolveSources: (u) => sl<CatalogueRepository>().sources(
                 u,
-                sourceId: widget.item.sourceId,
+                sourceId: playSourceId,
                 fast: true,
               ),
               // The resolve above returns on the first usable link so playback
@@ -1718,7 +1723,7 @@ class _DetailViewState extends State<_DetailView>
               // lets the Sources sheet pick them up once they land.
               pollSources: (u) => sl<CatalogueRepository>().polledSources(
                 u,
-                sourceId: widget.item.sourceId,
+                sourceId: playSourceId,
               ),
               history: sl<WatchHistory>(),
               showTitle: detail.title,

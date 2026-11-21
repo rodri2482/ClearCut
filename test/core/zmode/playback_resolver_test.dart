@@ -727,6 +727,52 @@ void main() {
     expect(src.log, isEmpty, reason: 'cancelled means cancelled');
   });
 
+  test('Play uses the source Auto Resolve found on Detail instead of '
+      're-sweeping into a different source', () async {
+    final src = _SweepSrc(
+      aEps: const [
+        Episode(id: '1', title: 'Ep 1', number: 1, url: 'https://a/1'),
+        Episode(id: '2', title: 'Ep 2', number: 2, url: 'https://a/2'),
+      ],
+      bEps: const [
+        Episode(id: '1', title: 'Ep 1', number: 1, url: 'https://b/1'),
+        Episode(id: '2', title: 'Ep 2', number: 2, url: 'https://b/2'),
+      ],
+      // The auto-found source has the working link; the other one does not.
+      aStreams: const [],
+      bStreams: const [VideoSource(url: 'https://b/stream')],
+    );
+    final matcher = SourceMatcher(
+      sources: src,
+      store: store,
+      prefs: prefs,
+      candidates: (_) => src.loadedSources,
+    );
+    await store.save(
+      _show,
+      const SourceMatch(
+        sourceId: 'src-b',
+        showUrl: 'https://b/show',
+        showId: 'b',
+        showTitle: 'FMA',
+        pinned: false,
+      ),
+    );
+    final r = resolver(sources: src, matcher: matcher);
+
+    final resolved = await r.resolveForPlayback(_ep2);
+    expect(resolved.match.sourceId, 'src-b');
+    expect(
+      src.log.where((l) => l.startsWith('sources:') && l.endsWith(':src-b')),
+      isNotEmpty,
+    );
+    expect(
+      src.log.where((l) => l.startsWith('sources:') && l.endsWith(':src-a')),
+      isEmpty,
+      reason: 'the auto-found source must be asked before any sweep source',
+    );
+  });
+
   test('a matched source with a cold first stream lookup is retried '
       'automatically, without the viewer pressing Retry', () async {
     final src = _FlakyStreamsSrc(

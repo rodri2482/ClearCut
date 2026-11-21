@@ -859,6 +859,34 @@ class PlaybackResolver {
       }
     }
 
+    // The detail screen's Auto Resolve already found a source for this title
+    // and saved the match. Play must open THAT source, not start a fresh 669
+    // candidate sweep and land on whichever source happens to sort first.
+    // A pin/kind choice above still wins; this is only the auto-found answer.
+    final autoFound = selectedSource == null ? _store.bestFor(p.show) : null;
+    if (autoFound != null &&
+        autoFound.showUrl.isNotEmpty &&
+        !dead.contains(autoFound.sourceId) &&
+        _sources.hasSource(autoFound.sourceId)) {
+      debugPrint(
+        '[playback] playing auto-found match · ${autoFound.sourceId} for '
+        '$zmEpisodeUrl',
+      );
+      final attempt = await ask(autoFound.sourceId);
+      if (gen != _sweepGen) throw const PlaybackAborted();
+      if (attempt != null) {
+        final event = await recordHit(attempt);
+        yield ProgressiveResolve(
+          match: event.match,
+          episodeUrl: event.episodeUrl,
+          streams: event.streams,
+          done: true,
+        );
+        return;
+      }
+      // Dead right now: fall through and give the other sources a chance.
+    }
+
     final remembered = selectedSource == null
         ? _rememberedPlaybackSource(p.show, ordered)
         : null;
@@ -1173,6 +1201,55 @@ class PlaybackResolver {
     // Results are read back in CANDIDATE order, never completion order: the
     // list is the viewer's own priority, and letting whichever source answers
     // first win would quietly replace their ordering with a race.
+    // Same fix as the progressive path: if Detail's Auto Resolve already
+    // matched this title, play that source instead of re-sweeping every
+    // installed source and letting an unrelated top-ranked one win.
+    final autoFound =
+        accept == null &&
+            pinned == null &&
+            _matcher.sourceForTitle(p.show) == null
+        ? _store.bestFor(p.show)
+        : null;
+    if (autoFound != null &&
+        autoFound.showUrl.isNotEmpty &&
+        !dead.contains(autoFound.sourceId) &&
+        _sources.hasSource(autoFound.sourceId)) {
+      debugPrint(
+        '[playback] _resolve · playing auto-found match '
+        '${autoFound.sourceId} for $zmEpisodeUrl',
+      );
+      final attempt = await ask(autoFound.sourceId);
+      if (attempt != null) {
+        _winners[_winKey(zmEpisodeUrl, category)] = (
+          episodeUrl: attempt.episodeUrl,
+          sourceId: attempt.match.sourceId,
+          match: attempt.match,
+        );
+        await _anchors?.save(
+          zmEpisodeUrl,
+          category,
+          EpisodeAnchor(
+            sourceId: attempt.match.sourceId,
+            episodeUrl: attempt.episodeUrl,
+            match: attempt.match,
+            streams: attempt.streams,
+            at: DateTime.now(),
+          ),
+        );
+        if (!attempt.match.pinned) {
+          await _store.rememberLastPlayed(p.show, attempt.match.sourceId);
+          await _scores?.bump(attempt.match.sourceId);
+        }
+        return ResolvedPlayback(
+          match: attempt.match,
+          episodeUrl: attempt.episodeUrl,
+          streams: attempt.streams,
+          show: p.show,
+          episode: p.episode,
+        );
+      }
+    }
+
     final remembered = accept == null
         ? _rememberedPlaybackSource(p.show, ordered)
         : null;

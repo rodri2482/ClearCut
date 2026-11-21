@@ -331,10 +331,13 @@ class AuthCubit extends Cubit<AuthState> {
         password: password,
       );
       return await _emitFromCurrentUser();
-    } on AuthException {
-      emit(
-        state.copyWith(busy: false, error: () => 'Invalid email or password'),
-      );
+    } on AuthException catch (e) {
+      // Supabase reports an unconfirmed address as an AuthException too. The
+      // old blanket message sent people to reset a password that was fine.
+      final message = e.message.toLowerCase().contains('not confirmed')
+          ? 'Check your email to confirm your account, then sign in.'
+          : 'Invalid email or password';
+      emit(state.copyWith(busy: false, error: () => message));
       return false;
     } catch (_) {
       emit(state.copyWith(busy: false, error: () => 'Authentication failed'));
@@ -396,20 +399,44 @@ class AuthCubit extends Cubit<AuthState> {
   Future<bool> signUp(String name, String email, String password) async {
     emit(state.copyWith(busy: true, error: () => null));
     try {
-      await _sb.client.auth.signUp(
+      final response = await _sb.client.auth.signUp(
         email: email,
         password: password,
         data: {'name': name},
       );
-      final authUser = _sb.client.auth.currentUser;
+      // Autoconfirm returns a session and sets `currentUser`; email
+      // confirmation returns just the user. Use BOTH so neither project
+      // configuration looks like a failed sign-up.
+      final authUser = response.user ?? _sb.client.auth.currentUser;
       if (authUser == null) {
         emit(state.copyWith(busy: false, error: () => 'Sign up failed'));
         return false;
       }
-      await _sb.client.from('profiles').upsert({
-        'id': authUser.id,
-        'display_name': name,
-      });
+      if (response.session == null) {
+        // The account exists, but the viewer must confirm their address
+        // before a session is issued. Say that instead of dropping them back
+        // to an empty sign-in screen.
+        emit(
+          state.copyWith(
+            busy: false,
+            error: () =>
+                'Account created. Check your email to confirm it, '
+                'then sign in.',
+          ),
+        );
+        return false;
+      }
+      // The display-name row is cosmetic. A fresh Supabase project has no
+      // `profiles` table yet (and may have RLS without an insert policy), so
+      // never let a failed upsert turn a successful sign-up into an error.
+      try {
+        await _sb.client.from('profiles').upsert({
+          'id': authUser.id,
+          'display_name': name,
+        });
+      } catch (_) {
+        // The name still lives in auth metadata via `data: {'name': name}`.
+      }
       final u = AuthUser.fromSupabase(authUser, {'display_name': name});
       _writeCachedUser(u);
       emit(
@@ -434,7 +461,10 @@ class AuthCubit extends Cubit<AuthState> {
   /// it works while signed out. Returns null on success, or an error message.
   Future<String?> sendRecovery(String email) async {
     try {
-      await _sb.client.auth.resetPasswordForEmail(email);
+      await _sb.client.auth.resetPasswordForEmail(
+        email,
+        redirectTo: 'zangetsu://open',
+      );
       return null;
     } on AuthException catch (e) {
       return e.message;

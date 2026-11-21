@@ -9,10 +9,11 @@ const String kAppName = 'ClearCut';
 /// already up to date.
 const bool kUpdaterEnabled = true;
 
-/// Cloud accounts and sync. Off: ClearCut has no server of its own, so every
-/// sign-in prompt and account screen is hidden. Library, history and
-/// downloads are stored on the device and work without an account.
-const bool kCloudEnabled = false;
+/// Cloud accounts and sync. The sign-in / account screens live behind this
+/// flag. They require a Supabase backend supplied at build time via
+/// `--dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...`;
+/// without one the app still works fully offline, just without an account.
+const bool kCloudEnabled = true;
 
 /// Running app version shown in Settings/About. Populated from the real build
 /// (PackageInfo) at boot so it never goes stale; this literal is just the

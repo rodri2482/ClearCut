@@ -7,6 +7,14 @@ import 'package:image/image.dart' as img;
 import 'package:watch_app/core/profiles/profile_avatar_uploader.dart';
 
 void main() {
+  test('profile media uses the signed-in owner folder in Supabase Storage', () async {
+    final adapter = _RecordingAdapter();
+    final dio = Dio()..httpClientAdapter = adapter;
+    final bytes = img.encodePng(img.Image(width: 2, height: 2));
+    await ProfileAvatarUploader(dio).upload(bytes: bytes, token: 'token');
+    expect(adapter.path, startsWith('https://storage.example/storage/v1/object/avatars/user/profile-media/'));
+  });
+
   test('urlOf takes the Worker public URL', () {
     expect(
       ProfileAvatarUploader.urlOf({'url': 'https://cdn.example/a.jpg'}),
@@ -450,6 +458,7 @@ bool _hasLoopMetadata(Uint8List gif) {
 class _RecordingAdapter implements HttpClientAdapter {
   int requests = 0;
   String? method;
+  String? path;
   dynamic data;
   String? authorization;
   String? contentType;
@@ -460,6 +469,7 @@ class _RecordingAdapter implements HttpClientAdapter {
   Future<ResponseBody> fetch(RequestOptions options, _, _) async {
     requests++;
     method = options.method;
+    path = options.path;
     data = options.data;
     authorization = options.headers['Authorization'] as String?;
     contentType = options.headers[Headers.contentTypeHeader] as String?;

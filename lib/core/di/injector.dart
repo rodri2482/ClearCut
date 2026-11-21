@@ -932,6 +932,9 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
     ),
     ('clearcut_peertube', 'peertube_video.js', 'PeerTube (free public video)'),
     ('clearcut_openverse', 'openverse_audio.js', 'Openverse (free music)'),
+    // Kept active at the user's explicit request. ClearCut does not modify or
+    // reverse-engineer this source's API; it is bundled as supplied.
+    ('clearcut_framextv', 'framextv.js', 'FrameXTV'),
   ]) {
     try {
       await registry.installFromBundled(

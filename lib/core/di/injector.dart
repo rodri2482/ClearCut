@@ -94,6 +94,7 @@ import 'package:watch_app/core/metadata/tmdb_fallback.dart';
 import '../metadata/title_logo_service.dart';
 import '../mode/content_mode_cubit.dart';
 import '../trailer/trailer_service.dart';
+import '../metadata/age_rating_service.dart';
 import '../anilist/anilist_graphql.dart';
 import '../anilist/anilist_network_policy.dart';
 import '../anilist/anilist_service.dart';
@@ -574,6 +575,7 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
 
   // Metadata-API trailer lookups (AniList for anime, TMDB for movie/TV).
   sl.registerSingleton<TrailerService>(TrailerService(dio));
+  sl.registerSingleton<AgeRatingService>(AgeRatingService(dio));
 
   // Detail-screen Cast + Relations enrichment (AniList for anime, TMDB for
   // movie/TV). Keys off the malId/tmdbId the providers already expose.

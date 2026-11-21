@@ -540,29 +540,6 @@ class MainActivity : AppCompatActivity(), FlutterEngineConfigurator {
                 }
             }
 
-        // NoFlix ad-free web player: plays a TMDB title in an ad-blocked WebView.
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "zangetsu/noflix")
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "open" -> {
-                        val tmdbId = call.argument<Int>("tmdbId") ?: 0
-                        if (tmdbId <= 0) {
-                            result.error("bad_id", "A TMDB id is required", null)
-                        } else {
-                            com.spyou.watch_app.noflix.NoFlixPlayerBridge.open(
-                                this,
-                                tmdbId,
-                                call.argument<Boolean>("isTv") ?: false,
-                                call.argument<Int>("season"),
-                                call.argument<Int>("episode"),
-                            )
-                            result.success(true)
-                        }
-                    }
-                    else -> result.notImplemented()
-                }
-            }
-
         // Unknown document providers return null rather than measuring a different drive.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "zangetsu/storage")
             .setMethodCallHandler { call, result ->

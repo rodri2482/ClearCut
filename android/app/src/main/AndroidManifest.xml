@@ -255,14 +255,6 @@
             android:theme="@style/Theme.PhonePlayer"
             android:supportsPictureInPicture="true"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode" />
-        <!-- NoFlix ad-free web player (noflix/NoFlixPlayerActivity). Rotates itself:
-             landscape on watch pages and full-screen video, portrait elsewhere. -->
-        <activity
-            android:name=".noflix.NoFlixPlayerActivity"
-            android:exported="false"
-            android:theme="@style/Theme.PhonePlayer"
-            android:hardwareAccelerated="true"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|density|uiMode" />
         <!-- Google Cast Framework configuration. -->
         <meta-data
             android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"

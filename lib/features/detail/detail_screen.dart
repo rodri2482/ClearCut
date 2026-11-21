@@ -115,6 +115,7 @@ import '../../core/repository/source_repository.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text.dart';
 import '../../core/trailer/trailer_service.dart';
+import '../../core/metadata/age_rating_service.dart';
 import '../../core/tv/tv_back_button.dart';
 import '../../core/tv/tv_focusable.dart';
 import '../../core/tv/tv_list_focusable.dart';
@@ -545,6 +546,9 @@ class _DetailViewState extends State<_DetailView>
   // player (Netflix-style).
   Future<String?>? _trailerFuture;
 
+  /// Age badge (e.g. "R", "PG-13", "18+") resolved once per detail load.
+  Future<String?>? _ageFuture;
+
   /// Poster-tinted background colour for the adaptive wash (null → normal
   /// theme background). Extraction runs once per hero-art URL.
   final ValueNotifier<Color?> _tint = ValueNotifier(null);
@@ -562,6 +566,16 @@ class _DetailViewState extends State<_DetailView>
       englishTitle: detail.englishTitle,
       type: detail.type,
       year: detail.year,
+    );
+  }
+
+  void _resolveAgeRating(MediaDetail detail) {
+    _ageFuture ??= sl<AgeRatingService>().label(
+      title: detail.title,
+      englishTitle: detail.englishTitle,
+      type: detail.type,
+      isAdult: detail.isAdult,
+      malId: detail.malId,
     );
   }
 
@@ -2379,34 +2393,6 @@ class _DetailViewState extends State<_DetailView>
     );
   }
 
-  static const _noflixChannel = MethodChannel('zangetsu/noflix');
-
-  /// Opens the NoFlix ad-free web player. A season/episode is passed only when
-  /// the source gave the episode an explicit season, because the stream site
-  /// shows a broken player for episode numbers past a season's end.
-  Future<void> _openNoFlix({
-    required int tmdbId,
-    required bool isTv,
-    int? season,
-    int? episode,
-  }) async {
-    try {
-      await _noflixChannel.invokeMethod('open', {
-        'tmdbId': tmdbId,
-        'isTv': isTv,
-        if (season != null && episode != null && episode > 0) ...{
-          'season': season,
-          'episode': episode,
-        },
-      });
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Ad-free player unavailable: ${e.message}')),
-      );
-    }
-  }
-
   Widget _buildBody(
     BuildContext context,
     DetailState state,
@@ -2452,18 +2438,6 @@ class _DetailViewState extends State<_DetailView>
     final episodeNum = eps.isNotEmpty
         ? (eps[resumeIdx].number?.toInt() ?? resumeIdx + 1)
         : 1;
-    // TMDB id for the NoFlix ad-free web player (Android, video only). Play
-    // falls back to it when no source has episodes for this title.
-    final adFreeTmdbId = !isReading && Platform.isAndroid
-        ? (detail.tmdbId ?? item.tmdbId)
-        : null;
-    // Movies and series only: anime matches the ad-free site's TMDB ids less
-    // reliably, so anime keeps using sources even with the setting on.
-    final isAnime = ZmodeIds.parseShow(item.url)?.kind == ZKind.anime;
-    final preferAdFree =
-        adFreeTmdbId != null &&
-        !isAnime &&
-        sl<PlaybackPrefs>().preferAdFreePlayer;
     final buttonLabel = isReading
         ? (readResume!.hasResume
               ? context.l10n.continueLabel
@@ -2511,6 +2485,7 @@ class _DetailViewState extends State<_DetailView>
 
     // The hero handles the lookup result without rebuilding the page.
     _resolveTrailer(detail);
+    _resolveAgeRating(detail);
 
     // Season data. PRESERVED.
     final seasonSet = seasonsOf(eps);
@@ -2753,10 +2728,23 @@ class _DetailViewState extends State<_DetailView>
                                       item.quality!.trim().toUpperCase(),
                                     ),
                                   ],
-                                  if (detail.isAdult) ...[
-                                    const SizedBox(width: 8),
-                                    const _MetaBadge('18+'),
-                                  ],
+                                  if (_ageFuture != null)
+                                    FutureBuilder<String?>(
+                                      future: _ageFuture,
+                                      builder: (context, snapshot) {
+                                        final label = snapshot.data;
+                                        if (label == null) {
+                                          return const SizedBox.shrink();
+                                        }
+                                        return Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const SizedBox(width: 8),
+                                            _MetaBadge(label),
+                                          ],
+                                        );
+                                      },
+                                    ),
                                 ],
                               ),
                             ],
@@ -2788,27 +2776,12 @@ class _DetailViewState extends State<_DetailView>
                   icon: isReading
                       ? Icons.menu_book_rounded
                       : Icons.play_arrow_rounded,
-                  // Sources first: their native player is already ad-free and
-                  // keeps resume + downloads. When no source has this title,
-                  // Play opens the NoFlix ad-free web player by TMDB id.
-                  // "Prefer ad-free player" (Settings → Playback) skips the
-                  // source search for movies and series entirely.
-                  onPressed: preferAdFree
-                      ? () => _openNoFlix(
-                          tmdbId: adFreeTmdbId,
-                          isTv: detail.tmdbId != null
-                              ? detail.tmdbIsTv
-                              : item.tmdbIsTv,
-                        )
-                      : eps.isNotEmpty
+                  // Playback always stays inside ClearCut. There is no
+                  // external web-player fallback: a title with no source is
+                  // simply not playable, which is honest and keeps the viewer
+                  // out of other people's sites.
+                  onPressed: eps.isNotEmpty
                       ? () => _openPlayer(eps, resumeIdx, detail, category)
-                      : (adFreeTmdbId != null && !state.episodesLoading)
-                      ? () => _openNoFlix(
-                          tmdbId: adFreeTmdbId,
-                          isTv: detail.tmdbId != null
-                              ? detail.tmdbIsTv
-                              : item.tmdbIsTv,
-                        )
                       : null,
                 ),
               ),

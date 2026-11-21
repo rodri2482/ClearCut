@@ -1,5 +1,5 @@
 ClearCut
-A modified version of Zangetsu with a native playback fallback for the streaming service used by NoFlix.
+A modified version of Zangetsu, combined with the NoFlix ad-free web player.
 Modifications (2026): rebranded as ClearCut; added the NoFlix ad-blocking web
 player and ad-block engine; disabled the upstream cloud services and updater.
 Licensed under the GNU General Public License version 3.0 (GPL-3.0).
@@ -30,7 +30,7 @@ AndroidX Jetpack Compose
 NoFlix (zobaer53/NoFlix)
   https://github.com/zobaer53/NoFlix
   License: Apache-2.0
-  The vendored ad-block
+  The ad-free web player (android/app/.../noflix/) and the vendored ad-block
   modules android/ad-filter and android/adblock-client (originally
   Edsuns/AdblockAndroid, Apache-2.0) come from NoFlix. Apache-2.0 code is
   compatible with, and here distributed under, the GPL-3.0 combined work.

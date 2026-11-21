@@ -258,12 +258,26 @@ final RegExp _titleDecorations = RegExp(
   r'|season\s*\d+|part\s*\d+|episode\s*\d+'
   r'|watch|online|full\s*movie|free'
   r'|dual\s*audio|multi\s*audio'
+  r'|(?:hindi|tamil|telugu|english|japanese|korean|arabic)\s*'
+  r'(?:dub(?:bed)?|sub(?:bed)?)'
   r'|\d{3,4}p|4k|hd|cam|hdrip|webrip|bluray'
   r')\b',
   caseSensitive: false,
 );
 
-String _stripTitleDecorations(String s) => s.replaceAll(_titleDecorations, ' ');
+/// A bracketed/parenthesised list of dubs or subtitles, e.g. the trailing
+/// `[Hindi-Tamil-Telugu-Eng-Jap]` streaming sites append to a season title.
+/// Language availability is not part of a show's identity — without this,
+/// "KonoSuba: God's Blessing ... Season 3 [Hindi-Tamil-...]" was rejected as a
+/// different title even though the season marker was already stripped.
+final RegExp _titleLanguageBlock = RegExp(
+  r'[\[(][^\]\)]*(?:hindi|tamil|telugu|english|eng|jap|japanese|korean|'
+  r'chinese|sub|dub|multi|audio|dual)[^\]\)]*[\])]',
+  caseSensitive: false,
+);
+
+String _stripTitleDecorations(String s) =>
+    s.replaceAll(_titleLanguageBlock, ' ').replaceAll(_titleDecorations, ' ');
 
 /// Noise a source bolts onto a title that carries no identity at all: wrapper
 /// words and quality/audio tags. Deliberately NOT the year or the
@@ -356,6 +370,23 @@ MediaItem? bestTitleMatch(
   if (wantedMalId != null) {
     for (final m in results) {
       if (m.malId != null && m.malId == wantedMalId) return m;
+    }
+  }
+  // Prefer a result whose name is the catalogue title *exactly* (normalised).
+  // When a source lists both "KonoSuba" and "KonoSuba Season 3", the viewer
+  // asked for the base show — only fall back to the decorated variant if the
+  // plain one was not returned.
+  final plainWants = <String>{
+    normalizeTitle(wanted),
+    if (altTitle != null && altTitle.isNotEmpty) normalizeTitle(altTitle),
+    for (final alias in metadataAliases)
+      if (alias.isNotEmpty) normalizeTitle(alias),
+  }..removeWhere((s) => s.isEmpty);
+  for (final m in results) {
+    if (plainWants.contains(normalizeTitle(m.title)) ||
+        (m.englishTitle != null &&
+            plainWants.contains(normalizeTitle(m.englishTitle!)))) {
+      return m;
     }
   }
   for (final m in results) {

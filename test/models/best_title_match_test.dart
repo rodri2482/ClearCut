@@ -14,6 +14,25 @@ MediaItem _item(String title, {String? english, int? malId}) => MediaItem(
 
 void main() {
   group('bestTitleMatch', () {
+    test('a season plus language list is not a different title (KonoSuba)', () {
+      const wanted = "KONOSUBA -God's blessing on this wonderful world!";
+      final source = _item(
+        'KonoSuba: God’s Blessing on This Wonderful World! Season 3 '
+        '[Hindi-Tamil-Telugu-Eng-Jap]',
+      );
+      expect(titleMatches(source, wanted), isTrue);
+      expect(bestTitleMatch([source], wanted), same(source));
+    });
+
+    test('a dubbed tag is not a different title', () {
+      expect(titleMatches(_item('Bleach Hindi Dubbed'), 'Bleach'), isTrue);
+      // A genuinely different show must still be rejected.
+      expect(
+        titleMatches(_item('Bleach: Thousand-Year Blood War'), 'Bleach'),
+        isFalse,
+      );
+    });
+
     test('returns null for empty results', () {
       expect(bestTitleMatch([], 'anything'), isNull);
     });

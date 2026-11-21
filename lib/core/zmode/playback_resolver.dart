@@ -250,14 +250,20 @@ class PlaybackResolver {
   static String _winKey(String zmEpisodeUrl, String category) =>
       '$zmEpisodeUrl|$category';
 
+  /// Playback opens on the FIRST link that passes. Give its neighbours only a
+  /// moment to join the initial list — the player's poll path and progressive
+  /// events bring the rest in while the episode is already playing. Downloads
+  /// keep StreamProbe's full window: a file needs every mirror up front.
+  static const Duration fastFirstHitGrace = Duration(milliseconds: 350);
+
   /// How long an anchor replay may wait for its source to hand back fresh
-  /// links, before falling back to the links saved with it.
+  /// links, but only after the saved links have all failed.
   static const Duration anchorResolveBudget = Duration(seconds: 4);
 
-  /// How long the saved links get to answer on replay. Short on purpose: the
-  /// anchor exists for speed, and a link that has not answered by then was
-  /// verified before it was saved, so [StreamProbe.liveStreams] hands it over
-  /// anyway rather than paying a dead host's full timeout.
+  /// How long the saved (or freshly re-resolved) links get to answer. Short on
+  /// purpose: this is a replay, so a slow host must not cost more than a normal
+  /// sweep would. Anything that has not answered like video by then is
+  /// dropped — the sweep takes over rather than gambling on an unchecked link.
   static const Duration anchorProbeBudget = Duration(milliseconds: 2500);
 
   /// In-flight resolves keyed by metadata episode url.
@@ -938,31 +944,38 @@ class PlaybackResolver {
     }
   }
 
-  /// Links for a remembered episode's [anchor]: ask its source for fresh ones
-  /// first, then fall back to the links saved with it.
+  /// Links for a remembered episode's [anchor], but ONLY ones that pass the
+  /// same video probe a fresh sweep uses. A remembered source is a head start,
+  /// not an excuse to hand the player a dead link.
   ///
-  /// Both steps are deliberately short. This runs on the foreground Play tap,
-  /// and its job is to beat the sweep — a slow source is the sweep's problem.
-  /// Saved links that cannot be checked in time are trusted (they answered
-  /// once); a link that answers with an error or a web page is not.
+  /// The saved links are checked first — if they still answer, nothing else is
+  /// contacted and Play starts without a search of any kind. Only when every
+  /// saved link has gone stale do we ask that same source for fresh links (one
+  /// bounded call, still no title/episode sweep), and check those too. If both
+  /// fail, the anchor is dropped and the normal sweep decides.
   Future<List<VideoSource>> _replayAnchor(EpisodeAnchor anchor) async {
-    var candidates = anchor.streams;
+    final saved = await _probe.liveStreams(
+      anchor.streams,
+      budget: anchorProbeBudget,
+      firstHitGrace: fastFirstHitGrace,
+    );
+    if (saved.isNotEmpty) return saved;
     try {
       final fresh = await _sources
           .sources(anchor.episodeUrl, sourceId: anchor.sourceId, fast: true)
           .timeout(anchorResolveBudget);
-      if (fresh.isNotEmpty) candidates = fresh;
+      if (fresh.isEmpty) return const <VideoSource>[];
+      return _probe.liveStreams(
+        fresh,
+        budget: anchorProbeBudget,
+        firstHitGrace: fastFirstHitGrace,
+      );
     } catch (e) {
       debugPrint(
-        '[playback] anchor · ${anchor.sourceId} did not re-resolve ($e) — '
-        'using the saved links',
+        '[playback] anchor · ${anchor.sourceId} did not re-resolve: $e',
       );
+      return const <VideoSource>[];
     }
-    return _probe.liveStreams(
-      candidates,
-      budget: anchorProbeBudget,
-      trustUnchecked: true,
-    );
   }
 
   /// How many of [ordered] a sweep will actually ask, for [SweepProgress] —
@@ -1330,7 +1343,10 @@ class PlaybackResolver {
         sourceId: hit.sourceId,
         fast: fast,
       );
-      final live = await _probe.liveStreams(fresh);
+      final live = await _probe.liveStreams(
+        fresh,
+        firstHitGrace: fast ? fastFirstHitGrace : null,
+      );
       if (live.isNotEmpty) return live;
       debugPrint(
         '[playback] sources · remembered ${hit.sourceId} now returns no '
@@ -1344,8 +1360,11 @@ class PlaybackResolver {
     // and a source already known unplayable for this episode is not replayed.
     final anchor = _anchors?.get(zmEpisodeUrl, category);
     final parsed = anchor == null ? null : ZmodeIds.parseEpisode(zmEpisodeUrl);
-    final selected = parsed == null ? null : _matcher.sourceForTitle(parsed.show);
-    final dead = _unplayable[_winKey(zmEpisodeUrl, category)] ?? const <String>{};
+    final selected = parsed == null
+        ? null
+        : _matcher.sourceForTitle(parsed.show);
+    final dead =
+        _unplayable[_winKey(zmEpisodeUrl, category)] ?? const <String>{};
     if (anchor != null &&
         parsed != null &&
         !dead.contains(anchor.sourceId) &&
@@ -1858,7 +1877,13 @@ class PlaybackResolver {
     // ClearCut: only accept a source whose links actually answer like video,
     // so auto-find moves on to the next source instead of handing the player
     // dead links.
-    final live = await _probe.liveStreams(streams);
+    final live = await _probe.liveStreams(
+      streams,
+      // Playback starts on the first confirmed link; late mirrors still
+      // arrive through progressive events and polling. A download passes
+      // fast:false and keeps the full window so no mirror is missed.
+      firstHitGrace: fast ? fastFirstHitGrace : null,
+    );
     if (live.isEmpty) {
       debugPrint(
         '[playback] _resolve · $sourceId → ${streams.length} streams for '

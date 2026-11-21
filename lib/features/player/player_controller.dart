@@ -2429,11 +2429,13 @@ class PlayerCubit extends Cubit<PlayerState> {
         }
         if (first) {
           first = false;
-          if (!await _openResolved(
-            event.streams,
-            gen,
-            waitForQualityPreference: true,
-          )) {
+          // Start on the first link that passed the probe. Do NOT hold the
+          // open for `waitForPreferredQuality`: a 2s poll for a nicer rung is
+          // the difference between instant Play and a blank wait, and the
+          // viewer can pick from the Sources sheet as the rest arrive. Their
+          // saved quality preference is still applied to this stream's HLS
+          // ladder, and to the one-shot path, unchanged.
+          if (!await _openResolved(event.streams, gen)) {
             return;
           }
           if (gen != _gen || isClosed) return;
@@ -2451,25 +2453,7 @@ class PlayerCubit extends Cubit<PlayerState> {
   /// Opens playback on an already-resolved list — the tail of [openEpisode]
   /// shared by the one-shot resolve and the progressive first event, so both
   /// open identically. Returns false when nothing was pickable (error shown).
-  Future<bool> _openResolved(
-    List<VideoSource> resolved,
-    int gen, {
-    bool waitForQualityPreference = false,
-  }) async {
-    final poll = _pollSources;
-    if (waitForQualityPreference && poll != null) {
-      final preferredKind = availableCategories.length > 1
-          ? (_activeCategory == 'dub' ? AudioKind.dub : AudioKind.sub)
-          : AudioKind.unknown;
-      resolved = await waitForPreferredQuality(
-        initial: resolved,
-        preferredQuality: _preferredQuality(),
-        preferredKind: preferredKind,
-        poll: () => poll(_episodeUrl(currentEpisode)),
-        isStillCurrent: () => gen == _gen && !isClosed,
-      );
-      if (gen != _gen || isClosed) return false;
-    }
+  Future<bool> _openResolved(List<VideoSource> resolved, int gen) async {
     final blocked = engineFallback?.blockedUrls(
       currentEpisode.url,
       _activeCategory,

@@ -45,13 +45,17 @@ class StreamProbe {
   /// [budget] caps the whole pass. It exists for replaying a remembered
   /// episode: the links were checked when they were saved, and waiting the
   /// full timeout on a slow host would spend the head start the memory bought.
-  /// Links still unanswered at the cap are dropped unless
-  /// [trustUnchecked] is set, which treats them as playable rather than
-  /// proven dead — the right call for a saved link that already worked once.
+  /// A link still unanswered at the cap is DROPPED, never handed over unchecked
+  /// — the saved source is skipped and the normal sweep takes over instead.
+  ///
+  /// [firstHitGrace] overrides how long to wait for the OTHER links once one
+  /// has passed. Playback passes a short one so the first working link opens
+  /// the episode; the remaining mirrors still arrive through the player's
+  /// poll path. Downloads leave it alone — a file needs every mirror.
   Future<List<VideoSource>> liveStreams(
     List<VideoSource> streams, {
     Duration? budget,
-    bool trustUnchecked = false,
+    Duration? firstHitGrace,
   }) async {
     if (streams.isEmpty) return streams;
     final probed = streams.take(maxProbed).toList();
@@ -78,21 +82,14 @@ class StreamProbe {
         } else if (ok) {
           // ClearCut: once one link is confirmed, wait only briefly for the
           // rest instead of for the slowest dead link's full timeout.
-          grace ??= Timer(firstHitGrace, finish);
+          grace ??= Timer(firstHitGrace ?? StreamProbe.firstHitGrace, finish);
         }
       });
     }
     await done.future;
-    final live = [
-      for (var i = 0; i < probed.length; i++)
-        if (alive[i] == true) probed[i],
-    ];
-    if (live.isNotEmpty || !trustUnchecked) return live;
-    // Nothing confirmed within the cap. Saved links that have not answered
-    // "no" are handed over; one that answered an error or a web page is not.
     return [
       for (var i = 0; i < probed.length; i++)
-        if (alive[i] != false) probed[i],
+        if (alive[i] == true) probed[i],
     ];
   }
 
@@ -205,6 +202,6 @@ class TrustingStreamProbe extends StreamProbe {
   Future<List<VideoSource>> liveStreams(
     List<VideoSource> streams, {
     Duration? budget,
-    bool trustUnchecked = false,
+    Duration? firstHitGrace,
   }) async => streams;
 }

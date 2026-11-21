@@ -26,6 +26,7 @@ import 'source_order_prefs.dart';
 import 'source_score_store.dart';
 import 'zmode_source_prefs.dart';
 import 'metadata_repository.dart';
+import 'nsfw_guard.dart';
 import 'source_matcher.dart';
 import 'tmdb_catalogue.dart';
 import 'tvmaze_catalogue.dart';
@@ -294,9 +295,14 @@ List<({String id, String name})> sweepList(ZKind kind) {
 /// sources above the configured cap that the sweep would never attempt, under
 /// a heading claiming they were used automatically. One function, one answer.
 List<({String id, String name})> sweepCandidates(ZKind kind) {
-  final narrowed = languageNarrowedCandidates(orderedCandidates(kind), {
-    for (final s in sl<SourceRepository>().loadedSources) s.id,
-  });
+  // Adult sources must never be chosen automatically. This is independent of
+  // the Privacy toggle (which only controls whether they are VISIBLE): an
+  // auto sweep has no way to tell that an adult source's "Ben 10" is not the
+  // children's show. They remain available for explicit per-title selection.
+  final narrowed = languageNarrowedCandidates(
+    orderedCandidates(kind).where((s) => !isAutoResolveBlocked(s.id)).toList(),
+    {for (final s in sl<SourceRepository>().loadedSources) s.id},
+  );
   // Rank first, then put the sources the user placed by hand back on top.
   //
   // The two are not rival modes. Dragging one favourite used to switch the

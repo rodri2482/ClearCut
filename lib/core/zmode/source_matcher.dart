@@ -6,6 +6,7 @@ import '../models/provider_info.dart';
 import '../provider/cf_solve_needed.dart';
 import '../repository/source_repository.dart';
 import 'match_store.dart';
+import 'nsfw_guard.dart';
 import 'playback_resolver.dart' show SweepReason;
 import 'zmode_ids.dart';
 import 'zmode_source_prefs.dart';
@@ -139,7 +140,33 @@ class SourceMatcher {
       if (abandoned?.call() ?? false) return null;
       try {
         final results = await _sources.search(q, sourceId: sourceId);
-        return (abandoned?.call() ?? false) ? null : results;
+        if (abandoned?.call() ?? false) return null;
+        if (sourceId != 'clearcut_framextv') return results;
+        // This source supplies catalogue IDs. Do not rely on title similarity
+        // when the same movie title has a remake, anime or TV adaptation.
+        final expected = switch (c.kind) {
+          ZKind.movie ||
+          ZKind.tv => int.tryParse(c.id.replaceFirst('tmdb:', '')),
+          ZKind.anime when c.id.startsWith('al:') => int.tryParse(
+            c.id.substring(3),
+          ),
+          _ => null,
+        };
+        if (expected == null) {
+          return c.kind == ZKind.anime
+              ? results
+                    .where((item) => item.type == ProviderType.anime)
+                    .toList()
+              : const [];
+        }
+        return results.where((item) {
+          return switch (c.kind) {
+            ZKind.movie => item.tmdbId == expected && !item.tmdbIsTv,
+            ZKind.tv => item.tmdbId == expected && item.tmdbIsTv,
+            ZKind.anime => item.anilistId == expected,
+            _ => false,
+          };
+        }).toList();
       } catch (e) {
         // Mihon/Aniyomi/LNReader report a challenge by THROWING, and this
         // catch used to drop it on the floor — the source just vanished from
@@ -281,6 +308,17 @@ class SourceMatcher {
     bool Function()? abandoned,
   }) async {
     if (abandoned?.call() ?? false) return null;
+    // An adult source may only be used when the viewer explicitly picked it
+    // for this title. Never follow a cached or auto-resolved match into one —
+    // that is how a children's show ended up opening explicit content.
+    if (isAutoResolveBlocked(sourceId) && sourceForTitle(c) != sourceId) {
+      await _store.forget(c, sourceId);
+      debugPrint(
+        '[source-matcher] matchOn · "$sourceId" blocked from auto matching; '
+        'its cached match was removed',
+      );
+      return null;
+    }
     final saved = _store.get(c, sourceId);
     // An empty showUrl is a pin with no match behind it — the user picked a
     // source that didn't have the title. It is a real choice, so it keeps

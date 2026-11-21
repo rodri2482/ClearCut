@@ -100,6 +100,38 @@ void main() {
   });
 
   group('matchOn cache safety', () {
+    test('an NSFW source is never followed from a cached match', () async {
+      final repo = _FakeSources({
+        'cs:Noodle NSFW': [_hit('cs:Noodle NSFW', 'Ben 10')],
+      });
+      final matcher = SourceMatcher(
+        sources: repo,
+        store: store,
+        prefs: prefs,
+        candidates: (_) => two,
+      );
+      await store.save(
+        fma,
+        const SourceMatch(
+          sourceId: 'cs:Noodle NSFW',
+          showUrl: 'https://noodle/fma',
+          showId: 'fma',
+          showTitle: 'FMA',
+          pinned: false,
+        ),
+      );
+
+      final r = await matcher.matchOn(
+        fma,
+        'cs:Noodle NSFW',
+        title: 'Fullmetal Alchemist: Brotherhood',
+      );
+
+      expect(r, isNull);
+      expect(store.get(fma, 'cs:Noodle NSFW'), isNull);
+      expect(repo.searched, isEmpty, reason: 'no search of an adult source');
+    });
+
     test(
       'a cached match naming another title is discarded and re-searched',
       () async {
@@ -170,6 +202,45 @@ void main() {
   });
 
   group('resolveOn', () {
+    test('FrameXTV requires the same TMDB ID and movie/TV kind', () async {
+      const source = 'clearcut_framextv';
+      MediaItem hit(int id, {required bool isTv}) => MediaItem(
+        id: '${isTv ? 'tv' : 'movie'}:$id',
+        title: 'Shared Title',
+        url: 'framextv://${isTv ? 'tv' : 'movie'}/$id',
+        type: ProviderType.movie,
+        sourceId: source,
+        tmdbId: id,
+        tmdbIsTv: isTv,
+      );
+      final matcher = SourceMatcher(
+        sources: _FakeSources({
+          source: [
+            hit(42, isTv: true),
+            hit(81, isTv: false),
+            hit(42, isTv: false),
+          ],
+        }),
+        store: store,
+        prefs: prefs,
+        candidates: (_) => [(id: source, name: 'FrameXTV')],
+      );
+
+      final match = await matcher.resolveOn(
+        const ZCanonical(ZKind.movie, 'tmdb:42'),
+        source,
+        title: 'Shared Title',
+      );
+      expect(match?.showUrl, 'framextv://movie/42');
+
+      final missing = await matcher.resolveOn(
+        const ZCanonical(ZKind.movie, 'tmdb:99'),
+        source,
+        title: 'Shared Title',
+      );
+      expect(missing, isNull);
+    });
+
     test('matches on exactly the named source', () async {
       final repo = _FakeSources(
         {

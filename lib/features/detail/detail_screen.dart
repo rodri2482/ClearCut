@@ -124,6 +124,7 @@ import '../../core/zmode/source_matcher.dart';
 import '../../core/ui/source_switcher.dart';
 import '../sources/zangetsu_sources_screen.dart';
 import '../../core/zmode/match_store.dart';
+import '../../core/zmode/nsfw_guard.dart';
 import '../../core/zmode/zmode_ids.dart';
 import '../../core/aniyomi/aniyomi_image_provider.dart';
 import '../../core/mihon/mihon_image_provider.dart';
@@ -1017,7 +1018,7 @@ class _DetailViewState extends State<_DetailView>
   String? _matchedSourceWebUrl(ZCanonical c) {
     if (!sl.isRegistered<MatchStore>()) return null;
     final m = sl<MatchStore>().bestFor(c);
-    if (m == null) return null;
+    if (m == null || isAutoResolveBlocked(m.sourceId)) return null;
     return source_actions.joinChapterUrl(
       sl<SourceRepository>().baseUrlFor(m.sourceId),
       m.showUrl,
@@ -1692,8 +1693,14 @@ class _DetailViewState extends State<_DetailView>
     // Hand the exact source Auto Resolve just found to the player. Going
     // through the normal `zm` router would make the player match the title
     // again and could land on a different, older guess for the same show.
+    // An adult source is never followed automatically — the viewer must
+    // pick it explicitly for this title. Without this, a cached auto-match
+    // from an NSFW source was handed straight to the player.
+    final matched = _zModeMatchedSource();
     final playSourceId =
-        _zModeMatchedSource()?.sourceId ?? widget.item.sourceId;
+        matched != null && !isAutoResolveBlocked(matched.sourceId)
+        ? matched.sourceId
+        : widget.item.sourceId;
     Navigator.of(context)
         .push(
           episodePlayerRoute(

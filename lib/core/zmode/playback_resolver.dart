@@ -14,6 +14,7 @@ import '../provider/provider_manager.dart';
 import '../repository/source_repository.dart';
 import 'episode_anchor_store.dart';
 import 'match_store.dart';
+import 'nsfw_guard.dart';
 import 'source_matcher.dart';
 import 'source_order_prefs.dart';
 import 'source_score_store.dart';
@@ -865,15 +866,28 @@ class PlaybackResolver {
     // candidate sweep and land on whichever source happens to sort first.
     // A pin/kind choice above still wins; this is only the auto-found answer.
     final autoFound = selectedSource == null ? _store.bestFor(p.show) : null;
-    if (autoFound != null &&
-        autoFound.showUrl.isNotEmpty &&
-        !dead.contains(autoFound.sourceId) &&
-        _sources.hasSource(autoFound.sourceId)) {
+    // Never replay an adult source through the auto-found shortcut. The
+    // viewer must choose such a source explicitly for this title.
+    if (autoFound != null && isAutoResolveBlocked(autoFound.sourceId)) {
+      await _store.forget(p.show, autoFound.sourceId);
       debugPrint(
-        '[playback] playing auto-found match · ${autoFound.sourceId} for '
+        '[playback] ignored blocked auto-found match ${autoFound.sourceId} '
+        'for $zmEpisodeUrl',
+      );
+    }
+    final safeAutoFound =
+        autoFound != null && isAutoResolveBlocked(autoFound.sourceId)
+        ? null
+        : autoFound;
+    if (safeAutoFound != null &&
+        safeAutoFound.showUrl.isNotEmpty &&
+        !dead.contains(safeAutoFound.sourceId) &&
+        _sources.hasSource(safeAutoFound.sourceId)) {
+      debugPrint(
+        '[playback] playing auto-found match · ${safeAutoFound.sourceId} for '
         '$zmEpisodeUrl',
       );
-      final attempt = await ask(autoFound.sourceId);
+      final attempt = await ask(safeAutoFound.sourceId);
       if (gen != _sweepGen) throw const PlaybackAborted();
       if (attempt != null) {
         final event = await recordHit(attempt);
@@ -1212,15 +1226,26 @@ class PlaybackResolver {
             _matcher.sourceForTitle(p.show) == null
         ? _store.bestFor(p.show)
         : null;
-    if (autoFound != null &&
-        autoFound.showUrl.isNotEmpty &&
-        !dead.contains(autoFound.sourceId) &&
-        _sources.hasSource(autoFound.sourceId)) {
+    if (autoFound != null && isAutoResolveBlocked(autoFound.sourceId)) {
+      await _store.forget(p.show, autoFound.sourceId);
       debugPrint(
-        '[playback] _resolve · playing auto-found match '
+        '[playback] _resolve · ignored blocked auto-found match '
         '${autoFound.sourceId} for $zmEpisodeUrl',
       );
-      final attempt = await ask(autoFound.sourceId);
+    }
+    final safeAutoFound =
+        autoFound != null && isAutoResolveBlocked(autoFound.sourceId)
+        ? null
+        : autoFound;
+    if (safeAutoFound != null &&
+        safeAutoFound.showUrl.isNotEmpty &&
+        !dead.contains(safeAutoFound.sourceId) &&
+        _sources.hasSource(safeAutoFound.sourceId)) {
+      debugPrint(
+        '[playback] _resolve · playing auto-found match '
+        '${safeAutoFound.sourceId} for $zmEpisodeUrl',
+      );
+      final attempt = await ask(safeAutoFound.sourceId);
       if (attempt != null) {
         _winners[_winKey(zmEpisodeUrl, category)] = (
           episodeUrl: attempt.episodeUrl,
@@ -1893,7 +1918,9 @@ class PlaybackResolver {
     final parsed = ZmodeIds.parseEpisode(zmEpisodeUrl);
     if (parsed == null) return const [];
     final remembered = _store.bestFor(parsed.show);
-    if (remembered == null) return const [];
+    if (remembered == null || isAutoResolveBlocked(remembered.sourceId)) {
+      return const [];
+    }
     final title = await _titleLookup(parsed.show);
     await _hasEpisode(parsed, remembered.sourceId, title, category: category);
     return const [];

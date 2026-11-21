@@ -403,6 +403,10 @@ class AuthCubit extends Cubit<AuthState> {
         email: email,
         password: password,
         data: {'name': name},
+        // Without this, Supabase sends the confirmation link to its default
+        // Site URL (http://localhost:3000). The app's own scheme brings the
+        // viewer straight back here with the session in the callback URI.
+        emailRedirectTo: 'zangetsu://open',
       );
       // Autoconfirm returns a session and sets `currentUser`; email
       // confirmation returns just the user. Use BOTH so neither project

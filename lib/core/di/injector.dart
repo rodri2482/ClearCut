@@ -802,40 +802,38 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   // like a user-installed LNReader plugin, refreshed from the bundled asset on
   // every launch so app updates also update the source.
   try {
-    await Hive.box<Map>(LnReaderExtensionService.boxName).put(
-      'clearcut_gutenberg',
-      {
-        'id': 'clearcut_gutenberg',
-        'name': 'Project Gutenberg (free books)',
-        'site': 'https://www.gutenberg.org',
-        'lang': 'English',
-        'version': '1.0.0',
-        'url': 'bundled://clearcut_gutenberg',
-        'iconUrl': 'https://www.gutenberg.org/gutenberg/pg-logo-129x80.png',
-        'js': await rootBundle.loadString('assets/builtin_sources/gutenberg.js'),
-      },
-    );
+    await Hive.box<Map>(
+      LnReaderExtensionService.boxName,
+    ).put('clearcut_gutenberg', {
+      'id': 'clearcut_gutenberg',
+      'name': 'Project Gutenberg (free books)',
+      'site': 'https://www.gutenberg.org',
+      'lang': 'English',
+      'version': '1.0.0',
+      'url': 'bundled://clearcut_gutenberg',
+      'iconUrl': 'https://www.gutenberg.org/gutenberg/pg-logo-129x80.png',
+      'js': await rootBundle.loadString('assets/builtin_sources/gutenberg.js'),
+    });
   } catch (e) {
     debugPrint('[builtin] Gutenberg source failed to load: $e');
   }
   // ClearCut built-in text source (Wikisource, public domain). Same lifecycle
   // as Gutenberg: stored as an LNReader plugin, refreshed every launch.
   try {
-    await Hive.box<Map>(LnReaderExtensionService.boxName).put(
-      'clearcut_wikisource',
-      {
-        'id': 'clearcut_wikisource',
-        'name': 'Wikisource (free texts)',
-        'site': 'https://en.wikisource.org',
-        'lang': 'English',
-        'version': '1.0.0',
-        'url': 'bundled://clearcut_wikisource',
-        'iconUrl': 'https://en.wikisource.org/favicon.ico',
-        'js': await rootBundle.loadString(
-          'assets/builtin_sources/wikisource_texts.js',
-        ),
-      },
-    );
+    await Hive.box<Map>(
+      LnReaderExtensionService.boxName,
+    ).put('clearcut_wikisource', {
+      'id': 'clearcut_wikisource',
+      'name': 'Wikisource (free texts)',
+      'site': 'https://en.wikisource.org',
+      'lang': 'English',
+      'version': '1.0.0',
+      'url': 'bundled://clearcut_wikisource',
+      'iconUrl': 'https://en.wikisource.org/favicon.ico',
+      'js': await rootBundle.loadString(
+        'assets/builtin_sources/wikisource_texts.js',
+      ),
+    });
   } catch (e) {
     debugPrint('[builtin] Wikisource source failed to load: $e');
   }
@@ -919,9 +917,19 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   for (final builtin in const [
     ('clearcut_archive', 'archive_films.js', 'Internet Archive (free films)'),
     ('clearcut_nasa', 'nasa_video.js', 'NASA (free space videos)'),
-    ('clearcut_wikimedia', 'wikimedia_video.js', 'Wikimedia Commons (free films)'),
+    (
+      'clearcut_wikimedia',
+      'wikimedia_video.js',
+      'Wikimedia Commons (free films)',
+    ),
     ('clearcut_blender', 'blender_movies.js', 'Blender Open Movies'),
-    ('clearcut_prelinger', 'prelinger_films.js', 'Prelinger Archives (free film)'),
+    (
+      'clearcut_prelinger',
+      'prelinger_films.js',
+      'Prelinger Archives (free film)',
+    ),
+    ('clearcut_peertube', 'peertube_video.js', 'PeerTube (free public video)'),
+    ('clearcut_openverse', 'openverse_audio.js', 'Openverse (free music)'),
   ]) {
     try {
       await registry.installFromBundled(

@@ -23,6 +23,7 @@ import '../profiles/viewer_profile.dart';
 import 'metadata_filters.dart';
 import 'metadata_provider_prefs.dart';
 import 'simkl_catalogue.dart';
+import 'tvmaze_catalogue.dart';
 import 'video_catalogue.dart';
 import 'match_store.dart';
 import 'episode_anchor_store.dart';
@@ -53,10 +54,16 @@ class MetadataRepository implements CatalogueRepository {
     void Function(String message)? onProviderFallback,
     SourceHealthStore? health,
     List<({String id, String name})> Function(ZKind)? candidates,
+
+    /// Free key-free TV metadata, used as the last stand-in when the chosen
+    /// movie/TV provider and its usual backup both fail. Optional so existing
+    /// tests and TV shells that don't wire it keep their exact behaviour.
+    TvmazeCatalogue? tvmaze,
   }) : _al = anilist,
        _tmdb = tmdb,
        _mal = mal,
        _simkl = simkl,
+       _tvmaze = tvmaze,
        _providerPrefs = providerPrefs,
        _onFallback = onProviderFallback,
        _searchCandidates =
@@ -104,6 +111,7 @@ class MetadataRepository implements CatalogueRepository {
 
   final AniListCatalogue _al;
   final MalCatalogue? _mal;
+  final TvmazeCatalogue? _tvmaze;
   final SimklCatalogue? _simkl;
   final MetadataProviderPrefs? _providerPrefs;
 
@@ -327,14 +335,46 @@ class MetadataRepository implements CatalogueRepository {
       primary = forced;
     }
     final chosen = primary;
-    final standIn = backup;
-    return _withProviderFallback(
-      primary: () => op(chosen),
-      backup: standIn == null ? null : () => op(standIn),
-      fallbackLabel: standIn is SimklCatalogue ? 'Simkl' : 'TMDB',
-      treatAsFailure: treatAsFailure,
-    );
+    final chain = <VideoCatalogue>[chosen];
+    if (backup != null && backup != chosen) chain.add(backup);
+    // TVmaze is a last resort, never a provider the viewer picked: it is free
+    // and key-free, but has no movie side and no user-facing switch. It only
+    // answers a request the other two genuinely could not.
+    final tvmaze = _tvmaze;
+    if (tvmaze != null && !chain.contains(tvmaze)) chain.add(tvmaze);
+
+    Object? lastError;
+    StackTrace? lastStack;
+    for (var i = 0; i < chain.length; i++) {
+      final provider = chain[i];
+      try {
+        final result = await op(provider);
+        if (treatAsFailure != null &&
+            treatAsFailure(result) &&
+            i + 1 < chain.length) {
+          continue;
+        }
+        if (i > 0) _onFallback?.call(_videoName(provider));
+        return result;
+      } catch (e, st) {
+        lastError = e;
+        lastStack = st;
+      }
+    }
+    // Report the failure from the LAST provider — the one that actually had
+    // the final say — rather than inventing a verdict about the chosen one.
+    final error = lastError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, lastStack ?? StackTrace.empty);
+    }
+    throw StateError('no video metadata provider could answer');
   }
+
+  static String _videoName(VideoCatalogue c) => switch (c) {
+    SimklCatalogue() => 'Simkl',
+    TvmazeCatalogue() => 'TVmaze',
+    _ => 'TMDB',
+  };
 
   // ── identity ─────────────────────────────────────────────────────────────
 

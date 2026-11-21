@@ -28,6 +28,7 @@ import 'zmode_source_prefs.dart';
 import 'metadata_repository.dart';
 import 'source_matcher.dart';
 import 'tmdb_catalogue.dart';
+import 'tvmaze_catalogue.dart';
 import 'zmode_ids.dart';
 import 'zmode_prefs.dart';
 
@@ -77,6 +78,7 @@ Future<void> registerZangetsuMode(GetIt sl) async {
             sl<ViewerProfileStore>().adultMetadataAllowed,
       ),
       tmdb: TmdbCatalogue(TmdbCatalogue.dioGet(sl<Dio>())),
+      tvmaze: TvmazeCatalogue(TvmazeCatalogue.dioGet(sl<Dio>())),
       searchCandidates: sweepCandidates,
       mal: MalCatalogue(sl<Dio>()),
       simkl: SimklCatalogue(sl<Dio>()),

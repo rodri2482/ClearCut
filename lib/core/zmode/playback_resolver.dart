@@ -789,12 +789,14 @@ class PlaybackResolver {
     /// Ask a set of candidates together and return their events in candidate
     /// order. The automatic second chance below uses the exact same
     /// attribution/ordering rules as the main sweep.
-    Future<List<ProgressiveResolve>> runWave(List<String> wave) async {
+    Stream<ProgressiveResolve> runWave(
+      List<String> wave, {
+      bool immediate = false,
+    }) async* {
       final pending = <String, Future<_Attempt?>>{
         for (final id in wave) id: ask(id),
       };
       final verdicts = <String, _Attempt?>{};
-      final events = <ProgressiveResolve>[];
       var cursor = 0;
       while (verdicts.length < pending.length) {
         final landed = await Future.any([
@@ -806,13 +808,20 @@ class PlaybackResolver {
         ]);
         verdicts[landed.id] = landed.attempt;
         if (gen != _sweepGen) throw const PlaybackAborted();
+        if (immediate) {
+          // "All" is about finding a video, not about defending a queue order.
+          // A higher-priority source that is about to time out must not hold
+          // playback while a lower-priority one already has working links.
+          final attempt = landed.attempt;
+          if (attempt != null) yield await recordHit(attempt);
+          continue;
+        }
         while (cursor < wave.length && verdicts.containsKey(wave[cursor])) {
           final id = wave[cursor++];
           final attempt = verdicts[id];
-          if (attempt != null) events.add(await recordHit(attempt));
+          if (attempt != null) yield await recordHit(attempt);
         }
       }
-      return events;
     }
 
     // A manually selected source is the whole playback resolution, not merely
@@ -878,7 +887,7 @@ class PlaybackResolver {
       // Asked at once, yielded in candidate order: every landing is parked by
       // candidate id and the wave drains from the front, so a hit is yielded
       // only once all higher-priority candidates in the wave have answered.
-      for (final event in await runWave(wave)) {
+      await for (final event in runWave(wave, immediate: allSources)) {
         yield event;
       }
       // A remembered show needs only its own source's mirrors; polling still
@@ -904,7 +913,7 @@ class PlaybackResolver {
           '[playback] second attempt for ${retry.length} matched source(s) of '
           '$zmEpisodeUrl — title lookups are cached',
         );
-        for (final event in await runWave(retry)) {
+        await for (final event in runWave(retry, immediate: allSources)) {
           yield event;
         }
         if (gen != _sweepGen) throw const PlaybackAborted();

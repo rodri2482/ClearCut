@@ -19,7 +19,14 @@ function getInfo() {
 }
 
 function _getJson(url) {
-  return fetch(url, { headers: { Accept: 'application/json' } }).then(function (r) {
+  // Openverse rejects requests without a descriptive User-Agent on some
+  // networks (the Android fetch channel sends a bare default otherwise).
+  return fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'ClearCut/1.0 (legal built-in source)',
+    },
+  }).then(function (r) {
     if (!r.ok) throw new Error('Openverse: HTTP ' + r.status);
     try { return JSON.parse(r.body || 'null'); } catch (e) { throw new Error('Openverse: bad JSON'); }
   });

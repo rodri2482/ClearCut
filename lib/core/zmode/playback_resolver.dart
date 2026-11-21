@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../models/episode.dart';
 import '../models/video_source.dart';
 import '../playback/source_health_store.dart';
+import '../playback/stream_enrichment.dart';
 import '../di/injector.dart';
 import '../provider/cf_solve_needed.dart';
 import '../provider/cloudstream_provider.dart';
@@ -1049,17 +1050,18 @@ class PlaybackResolver {
       budget: anchorProbeBudget,
       firstHitGrace: fastFirstHitGrace,
     );
-    if (saved.isNotEmpty) return saved;
+    if (saved.isNotEmpty) return enrichStreams(saved);
     try {
       final fresh = await _sources
           .sources(anchor.episodeUrl, sourceId: anchor.sourceId, fast: true)
           .timeout(anchorResolveBudget);
       if (fresh.isEmpty) return const <VideoSource>[];
-      return _probe.liveStreams(
+      final live = await _probe.liveStreams(
         fresh,
         budget: anchorProbeBudget,
         firstHitGrace: fastFirstHitGrace,
       );
+      return enrichStreams(live);
     } catch (e) {
       debugPrint(
         '[playback] anchor · ${anchor.sourceId} did not re-resolve: $e',
@@ -1486,7 +1488,7 @@ class PlaybackResolver {
         fresh,
         firstHitGrace: fast ? fastFirstHitGrace : null,
       );
-      if (live.isNotEmpty) return live;
+      if (live.isNotEmpty) return enrichStreams(live);
       debugPrint(
         '[playback] sources · remembered ${hit.sourceId} now returns no '
         'playable link for $zmEpisodeUrl — trying the next source',
@@ -2033,7 +2035,11 @@ class PlaybackResolver {
       onMiss(SweepReason.noStreams);
       return null;
     }
-    return _Attempt(match: match, episodeUrl: srcEp.url, streams: live);
+    return _Attempt(
+      match: match,
+      episodeUrl: srcEp.url,
+      streams: enrichStreams(live),
+    );
   }
 
   String? _rememberedPlaybackSource(ZCanonical c, List<String> ordered) {

@@ -3193,7 +3193,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ? _c.currentEpisode.thumbnail!.trim()
           : widget.cover,
       loading: state.loadingSources || state.torrentPhase != null,
-      loadingStatus: state.torrentPhase,
+      loadingStatus: state.loadingSources || state.torrentPhase != null
+          ? _loadingLabel(state)
+          : null,
       bufferingStream: _c.player.stream.buffering,
       initialBuffering: _c.player.state.buffering,
       firstFrameStream: _c.player.stream.width,
@@ -3658,6 +3660,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
+  /// The line under the loading spinner during a playback sweep.
+  ///
+  /// A torrent's own phase wins. Otherwise a source sweep says how far it has
+  /// got: "3 of 8" is the difference between a hang and progress. Before the
+  /// sweep knows its queue (cached winner, anchor replay, local file) it falls
+  /// back to the old line.
+  String _loadingLabel(PlayerState state) {
+    final phase = state.torrentPhase;
+    if (phase != null) return phase;
+    final total = state.sweepTotal;
+    if (!state.loadingSources || total <= 0) {
+      return 'Finding the best source…';
+    }
+    final checked = state.sweepChecked.clamp(1, total);
+    return 'Checking $checked of $total sources…';
+  }
+
   /// Portrait twin of [_loadingBackdropBody]: the same boxed surface card
   /// (cover art dimmed, loader on top) with skeleton rows below — so opening
   /// from detail lands straight on the portrait page instead of a fullscreen
@@ -3913,7 +3932,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             }
             if (state.loadingSources) {
               return _loadingBackdropBody(
-                'Finding the best source…',
+                _loadingLabel(state),
                 thumb: _c.currentEpisode.thumbnail,
               );
             }

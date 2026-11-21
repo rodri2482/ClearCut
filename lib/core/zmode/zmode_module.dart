@@ -20,6 +20,7 @@ import '../ui/app_toast.dart';
 import '../ui/global_messenger.dart';
 import '../ui/source_switcher.dart';
 import 'match_store.dart';
+import 'episode_anchor_store.dart';
 import 'playback_resolver.dart';
 import 'source_order_prefs.dart';
 import 'source_score_store.dart';
@@ -38,6 +39,9 @@ import 'zmode_prefs.dart';
 Future<void> registerZangetsuMode(GetIt sl) async {
   final matchStore = await MatchStore.open();
   sl.registerSingleton<MatchStore>(matchStore);
+
+  final anchorStore = await EpisodeAnchorStore.open();
+  sl.registerSingleton<EpisodeAnchorStore>(anchorStore);
 
   final sourcePrefs = await ZSourcePrefs.open();
   sl.registerSingleton<ZSourcePrefs>(sourcePrefs);
@@ -97,6 +101,7 @@ Future<void> registerZangetsuMode(GetIt sl) async {
       matcher: sl<SourceMatcher>(),
       matchStore: matchStore,
       sourcePrefs: sourcePrefs,
+      anchors: anchorStore,
       health: sl<SourceHealthStore>(),
       candidates: orderedCandidates,
       browseKind: () =>

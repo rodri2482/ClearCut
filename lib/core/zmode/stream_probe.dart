@@ -41,18 +41,33 @@ class StreamProbe {
 
   /// The streams worth handing to the player — only links that answered like
   /// video, in their original order. Empty means: try the next source.
-  Future<List<VideoSource>> liveStreams(List<VideoSource> streams) async {
+  ///
+  /// [budget] caps the whole pass. It exists for replaying a remembered
+  /// episode: the links were checked when they were saved, and waiting the
+  /// full timeout on a slow host would spend the head start the memory bought.
+  /// Links still unanswered at the cap are dropped unless
+  /// [trustUnchecked] is set, which treats them as playable rather than
+  /// proven dead — the right call for a saved link that already worked once.
+  Future<List<VideoSource>> liveStreams(
+    List<VideoSource> streams, {
+    Duration? budget,
+    bool trustUnchecked = false,
+  }) async {
     if (streams.isEmpty) return streams;
     final probed = streams.take(maxProbed).toList();
     final alive = List<bool?>.filled(probed.length, null);
     final done = Completer<void>();
     var finished = 0;
     Timer? grace;
+    Timer? cap;
 
     void finish() {
       grace?.cancel();
+      cap?.cancel();
       if (!done.isCompleted) done.complete();
     }
+
+    if (budget != null) cap = Timer(budget, finish);
 
     for (var i = 0; i < probed.length; i++) {
       isAlive(probed[i]).then((ok) {
@@ -68,9 +83,16 @@ class StreamProbe {
       });
     }
     await done.future;
-    return [
+    final live = [
       for (var i = 0; i < probed.length; i++)
         if (alive[i] == true) probed[i],
+    ];
+    if (live.isNotEmpty || !trustUnchecked) return live;
+    // Nothing confirmed within the cap. Saved links that have not answered
+    // "no" are handed over; one that answered an error or a web page is not.
+    return [
+      for (var i = 0; i < probed.length; i++)
+        if (alive[i] != false) probed[i],
     ];
   }
 
@@ -180,6 +202,9 @@ class TrustingStreamProbe extends StreamProbe {
   TrustingStreamProbe() : super(dio: Dio());
 
   @override
-  Future<List<VideoSource>> liveStreams(List<VideoSource> streams) async =>
-      streams;
+  Future<List<VideoSource>> liveStreams(
+    List<VideoSource> streams, {
+    Duration? budget,
+    bool trustUnchecked = false,
+  }) async => streams;
 }

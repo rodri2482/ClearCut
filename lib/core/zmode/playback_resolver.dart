@@ -11,6 +11,7 @@ import '../provider/cloudstream_provider.dart';
 import '../provider/js_engine.dart';
 import '../provider/provider_manager.dart';
 import '../repository/source_repository.dart';
+import 'episode_anchor_store.dart';
 import 'match_store.dart';
 import 'source_matcher.dart';
 import 'source_order_prefs.dart';
@@ -149,6 +150,20 @@ class ProgressiveResolve {
   final bool done;
 }
 
+/// How far a playback sweep has got, for a "Checking N of M sources…" line.
+///
+/// [total] is the number of candidates that will actually be asked — sources
+/// skipped up front for being dead, Cloudflare-blocked, unhealthy or on
+/// cooldown are not counted, because "of 32" when twelve are never asked is
+/// not progress, it is a lie.
+class SweepProgress {
+  const SweepProgress({required this.checked, required this.total});
+
+  /// Sources handed to a candidate so far, including the ones in flight.
+  final int checked;
+  final int total;
+}
+
 /// Sweeps installed video sources at play time until one can serve streams for
 /// a metadata episode. Winner is cached for [polledSources] and next-episode
 /// prefetch on the same session.
@@ -176,6 +191,10 @@ class PlaybackResolver {
 
     /// Checks stream links before a source is accepted. Tests pass a fake.
     StreamProbe? probe,
+
+    /// Remembers the winning source and links per episode across restarts.
+    /// Optional, like [scores]: tests build this resolver without one.
+    EpisodeAnchorStore? anchors,
   }) : _probe = probe ?? StreamProbe(),
        _budget = perSourceBudget ?? defaultPerSourceBudget,
        _chosenBudget = chosenBudget ?? chosenSourceBudget,
@@ -187,7 +206,8 @@ class PlaybackResolver {
        _prefs = prefs,
        _health = health,
        _candidates = candidates,
-       _scores = scores;
+       _scores = scores,
+       _anchors = anchors;
 
   final StreamProbe _probe;
   final SourceMatcher _matcher;
@@ -201,6 +221,10 @@ class PlaybackResolver {
   /// on what has actually worked. Optional: every existing test builds this
   /// resolver without one, and a missing store simply means nothing is counted.
   final SourceScoreStore? _scores;
+
+  /// Disk-backed memory of what last played each episode. See
+  /// [EpisodeAnchorStore]. `null` in tests and anywhere DI is absent.
+  final EpisodeAnchorStore? _anchors;
   late Future<({String title, String? alt, int? malId})> Function(ZCanonical c)
   _titleLookup;
 
@@ -225,6 +249,16 @@ class PlaybackResolver {
 
   static String _winKey(String zmEpisodeUrl, String category) =>
       '$zmEpisodeUrl|$category';
+
+  /// How long an anchor replay may wait for its source to hand back fresh
+  /// links, before falling back to the links saved with it.
+  static const Duration anchorResolveBudget = Duration(seconds: 4);
+
+  /// How long the saved links get to answer on replay. Short on purpose: the
+  /// anchor exists for speed, and a link that has not answered by then was
+  /// verified before it was saved, so [StreamProbe.liveStreams] hands it over
+  /// anyway rather than paying a dead host's full timeout.
+  static const Duration anchorProbeBudget = Duration(milliseconds: 2500);
 
   /// In-flight resolves keyed by metadata episode url.
   final Map<String, Future<ResolvedPlayback>> _inFlight = {};
@@ -354,6 +388,10 @@ class PlaybackResolver {
     (_unplayable[key] ??= <String>{}).add(sourceId);
     _winners.remove(key);
     _noSource.remove(key);
+    // The saved anchor names this source for this episode. Keep it and the
+    // next restart hands the same dead link back before the player can fail
+    // over, so forget it with the winner.
+    unawaited(_anchors?.remove(zmEpisodeUrl, category) ?? Future<void>.value());
     debugPrint(
       '[playback] markSourceUnplayable · $sourceId for $zmEpisodeUrl '
       '($category) — ${_unplayable[key]!.length} now excluded',
@@ -499,6 +537,10 @@ class PlaybackResolver {
     String zmEpisodeUrl, {
     String category = 'sub',
     bool stopAfterFirstWave = false,
+
+    /// Reports "which source of how many" as candidates are asked, so the
+    /// player can say "Checking 3 of 8 sources…" instead of a bare spinner.
+    void Function(SweepProgress progress)? onProgress,
   }) async* {
     // Read FIRST, before any await — same reason as [_resolve]: a generation
     // taken after one reads whatever an abort already set, so the sweep it
@@ -510,6 +552,15 @@ class PlaybackResolver {
     if (p == null) {
       throw ArgumentError('not a metadata episode url: $zmEpisodeUrl');
     }
+    // A listener that throws must never take the sweep down with it.
+    void report(int checked, int total) {
+      final cb = onProgress;
+      if (cb == null) return;
+      try {
+        cb(SweepProgress(checked: checked, total: total));
+      } catch (_) {}
+    }
+
     // A sweep that found nothing is remembered by the full path; a replay
     // through here answers from that memory instead of paying the sweep again.
     final flightKey = _winKey(zmEpisodeUrl, category);
@@ -549,10 +600,71 @@ class PlaybackResolver {
       // than handing playback an empty list.
       _winners.remove(flightKey);
     }
-    final t = await _titleLookup(p.show);
     // Explicit per-title and kind-wide choices both mean use this source, not
     // merely put it first in an Auto Resolve sweep.
+    //
+    // The source the viewer picked for this title also outranks the disk
+    // memory: an anchor naming a different source belongs to the choice that
+    // was replaced, not to this one.
     final selectedSource = _matcher.sourceForTitle(p.show);
+    // Persisted anchor: the last source that worked for this episode, from an
+    // earlier run. The in-memory winner died with the process, but this did
+    // not — so the first Play after a restart opens on the same source
+    // instead of paying the whole title-match/episode-list sweep again.
+    //
+    // Fresh links first (a CDN token saved an hour ago is likely dead), then
+    // the saved ones. Both are bounded, and an anchor that serves nothing is
+    // forgotten rather than replayed forever.
+    final anchor = _anchors?.get(zmEpisodeUrl, category);
+    if (anchor != null &&
+        (selectedSource == null || selectedSource == anchor.sourceId)) {
+      report(1, 1);
+      final streams = await Future.any<List<VideoSource>>([
+        _replayAnchor(anchor),
+        abortFuture.then<List<VideoSource>>(
+          (_) => throw const PlaybackAborted(),
+        ),
+      ]);
+      if (gen != _sweepGen) throw const PlaybackAborted();
+      if (streams.isNotEmpty) {
+        _winners[flightKey] = (
+          episodeUrl: anchor.episodeUrl,
+          sourceId: anchor.sourceId,
+          match: anchor.match,
+        );
+        // Refresh what the anchor holds: the links just checked are fresher
+        // than the ones on disk.
+        await _anchors?.save(
+          zmEpisodeUrl,
+          category,
+          EpisodeAnchor(
+            sourceId: anchor.sourceId,
+            episodeUrl: anchor.episodeUrl,
+            match: anchor.match,
+            streams: streams,
+            at: DateTime.now(),
+          ),
+        );
+        debugPrint(
+          '[playback] resolveProgressive · anchor hit · ${anchor.sourceId} '
+          'for $zmEpisodeUrl (${anchor.streams.length} saved, '
+          '${streams.length} live)',
+        );
+        yield ProgressiveResolve(
+          match: anchor.match,
+          episodeUrl: anchor.episodeUrl,
+          streams: streams,
+          done: true,
+        );
+        return;
+      }
+      debugPrint(
+        '[playback] resolveProgressive · anchor for $zmEpisodeUrl no longer '
+        'plays — sweeping',
+      );
+      await _anchors?.remove(zmEpisodeUrl, category);
+    }
+    final t = await _titleLookup(p.show);
     final ordered = _orderedCandidates(p.show);
     if (ordered.isEmpty) {
       throw NoSourceMatch(p.show);
@@ -572,7 +684,13 @@ class PlaybackResolver {
 
     // One candidate, start to finish — same body as [_resolve]'s `ask`, minus
     // the download branch: progressive is always the foreground wait.
+    var checked = 0;
+    final total = selectedSource != null ? 1 : _projectedTotal(ordered, dead);
+    report(checked, total);
+
     Future<_Attempt?> ask(String sourceId) async {
+      checked++;
+      report(checked, total);
       _Attempt? attempt;
       final budget = _budgetFor(sourceId, chosen);
       try {
@@ -624,6 +742,19 @@ class PlaybackResolver {
           episodeUrl: attempt.episodeUrl,
           sourceId: attempt.match.sourceId,
           match: attempt.match,
+        );
+        // Persist the winner so the next app run opens this episode on the
+        // same source and link, without a sweep.
+        await _anchors?.save(
+          zmEpisodeUrl,
+          category,
+          EpisodeAnchor(
+            sourceId: attempt.match.sourceId,
+            episodeUrl: attempt.episodeUrl,
+            match: attempt.match,
+            streams: attempt.streams,
+            at: DateTime.now(),
+          ),
         );
         if (!attempt.match.pinned) {
           await _store.rememberLastPlayed(p.show, attempt.match.sourceId);
@@ -781,6 +912,73 @@ class PlaybackResolver {
       streams: [...acc],
       done: true,
     );
+  }
+
+  /// Warms the next episode while the current one is still playing, so a
+  /// binge advances without the sweep. Resolves exactly as Play would, stops
+  /// after the first wave that answers, and leaves the winner saved as the
+  /// episode's [EpisodeAnchor] — so the next Play opens on the first working
+  /// link while the rest of the mirrors arrive through polling.
+  ///
+  /// Fire-and-forget. A failure just means the next Play does the work itself.
+  Future<void> prefetchEpisode(
+    String zmEpisodeUrl, {
+    String category = 'sub',
+  }) async {
+    try {
+      await for (final event in resolveProgressive(
+        zmEpisodeUrl,
+        category: category,
+        stopAfterFirstWave: true,
+      )) {
+        if (event.done) break;
+      }
+    } catch (e) {
+      debugPrint('[playback] prefetchEpisode · $zmEpisodeUrl failed: $e');
+    }
+  }
+
+  /// Links for a remembered episode's [anchor]: ask its source for fresh ones
+  /// first, then fall back to the links saved with it.
+  ///
+  /// Both steps are deliberately short. This runs on the foreground Play tap,
+  /// and its job is to beat the sweep — a slow source is the sweep's problem.
+  /// Saved links that cannot be checked in time are trusted (they answered
+  /// once); a link that answers with an error or a web page is not.
+  Future<List<VideoSource>> _replayAnchor(EpisodeAnchor anchor) async {
+    var candidates = anchor.streams;
+    try {
+      final fresh = await _sources
+          .sources(anchor.episodeUrl, sourceId: anchor.sourceId, fast: true)
+          .timeout(anchorResolveBudget);
+      if (fresh.isNotEmpty) candidates = fresh;
+    } catch (e) {
+      debugPrint(
+        '[playback] anchor · ${anchor.sourceId} did not re-resolve ($e) — '
+        'using the saved links',
+      );
+    }
+    return _probe.liveStreams(
+      candidates,
+      budget: anchorProbeBudget,
+      trustUnchecked: true,
+    );
+  }
+
+  /// How many of [ordered] a sweep will actually ask, for [SweepProgress] —
+  /// the same pre-filter [_resolve] and [resolveProgressive] apply per wave.
+  int _projectedTotal(List<String> ordered, Set<String> dead) {
+    var n = 0;
+    for (final id in ordered) {
+      if (dead.contains(id) ||
+          CfSolveNeeded.sourceFlagged(id) ||
+          _health.isSkippable(id) ||
+          _recentlyOverBudget(id)) {
+        continue;
+      }
+      n++;
+    }
+    return n;
   }
 
   Future<ResolvedPlayback> _resolve(
@@ -1037,6 +1235,19 @@ class PlaybackResolver {
           sourceId: attempt.match.sourceId,
           match: attempt.match,
         );
+        // Same disk memory as the progressive path: the next run's Play gets
+        // this source without repeating the sweep.
+        await _anchors?.save(
+          zmEpisodeUrl,
+          category,
+          EpisodeAnchor(
+            sourceId: attempt.match.sourceId,
+            episodeUrl: attempt.episodeUrl,
+            match: attempt.match,
+            streams: attempt.streams,
+            at: DateTime.now(),
+          ),
+        );
         // Per-title only — remembered for THIS show's own re-ranking (see
         // `_orderedCandidates`). This must never write the kind-wide
         // `ZSourcePrefs` default: that's an explicit, rare user choice (the
@@ -1126,6 +1337,44 @@ class PlaybackResolver {
         'playable link for $zmEpisodeUrl — trying the next source',
       );
       markSourceUnplayable(zmEpisodeUrl, hit.sourceId, category: category);
+    }
+    // Disk memory of the source that played this episode in an earlier run.
+    // The in-memory winner above dies with the process; this does not. Same
+    // rule as the progressive path: the viewer's explicit pick wins over it,
+    // and a source already known unplayable for this episode is not replayed.
+    final anchor = _anchors?.get(zmEpisodeUrl, category);
+    final parsed = anchor == null ? null : ZmodeIds.parseEpisode(zmEpisodeUrl);
+    final selected = parsed == null ? null : _matcher.sourceForTitle(parsed.show);
+    final dead = _unplayable[_winKey(zmEpisodeUrl, category)] ?? const <String>{};
+    if (anchor != null &&
+        parsed != null &&
+        !dead.contains(anchor.sourceId) &&
+        (selected == null || selected == anchor.sourceId)) {
+      final live = await _replayAnchor(anchor);
+      if (live.isNotEmpty) {
+        _winners[_winKey(zmEpisodeUrl, category)] = (
+          episodeUrl: anchor.episodeUrl,
+          sourceId: anchor.sourceId,
+          match: anchor.match,
+        );
+        await _anchors?.save(
+          zmEpisodeUrl,
+          category,
+          EpisodeAnchor(
+            sourceId: anchor.sourceId,
+            episodeUrl: anchor.episodeUrl,
+            match: anchor.match,
+            streams: live,
+            at: DateTime.now(),
+          ),
+        );
+        return live;
+      }
+      debugPrint(
+        '[playback] sources · anchor for $zmEpisodeUrl no longer plays — '
+        'sweeping',
+      );
+      await _anchors?.remove(zmEpisodeUrl, category);
     }
     return (await resolveForPlayback(
       zmEpisodeUrl,
@@ -1221,6 +1470,9 @@ class PlaybackResolver {
     for (final k in flights) {
       _inFlight.remove(k);
     }
+    // The disk memory names sources for this show too; a source switch that
+    // left it in place would replay the old source on the next restart.
+    unawaited(_anchors?.removePrefix(prefix) ?? Future<void>.value());
     // Source switch / CF solve — same "try again" intent as an episode tap.
     final clearedBudget = _overBudget.isNotEmpty;
     if (clearedBudget) _overBudget.clear();

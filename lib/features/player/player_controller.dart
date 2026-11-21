@@ -101,6 +101,8 @@ String? _configHwdec() => currentDecoderPlatform == DecoderPlatform.apple
 class PlayerState extends Equatable {
   const PlayerState({
     this.loadingSources = false,
+    this.sweepChecked = 0,
+    this.sweepTotal = 0,
     this.error,
     this.sources = const [],
     this.active,
@@ -115,6 +117,11 @@ class PlayerState extends Equatable {
 
   /// True while sources for the current episode are being resolved.
   final bool loadingSources;
+
+  /// Playback-sweep progress, for "Checking 3 of 8 sources…". [sweepTotal] is
+  /// zero until the sweep knows which candidates it will actually ask.
+  final int sweepChecked;
+  final int sweepTotal;
 
   /// Non-null when sources couldn't be resolved/played (drives the retry UI).
   final String? error;
@@ -147,6 +154,8 @@ class PlayerState extends Equatable {
 
   PlayerState copyWith({
     bool? loadingSources,
+    int? sweepChecked,
+    int? sweepTotal,
     String? Function()? error,
     List<VideoSource>? sources,
     VideoSource? Function()? active,
@@ -159,6 +168,8 @@ class PlayerState extends Equatable {
     bool? addonSubtitlesChecked,
   }) => PlayerState(
     loadingSources: loadingSources ?? this.loadingSources,
+    sweepChecked: sweepChecked ?? this.sweepChecked,
+    sweepTotal: sweepTotal ?? this.sweepTotal,
     error: error != null ? error() : this.error,
     sources: sources ?? this.sources,
     active: active != null ? active() : this.active,
@@ -174,6 +185,8 @@ class PlayerState extends Equatable {
   @override
   List<Object?> get props => [
     loadingSources,
+    sweepChecked,
+    sweepTotal,
     error,
     sources,
     active,
@@ -1235,13 +1248,18 @@ class PlayerCubit extends Cubit<PlayerState> {
             // Z Mode used to skip this entirely, because SourceRepository's
             // own prefetch throws for the zm pseudo source — so every episode
             // of a binge paid the full resolve again (7.3s median across 139
-            // plays, 20s at p90). The catalogue resolves it the same way Play
-            // will, and the winning source is already known here: we are
-            // playing from it. Fire-and-forget; a failure just means the next
-            // Play does the work itself, exactly as it did before.
-            sl<CatalogueRepository>()
-                .sources(nextUrl, sourceId: sourceId, fast: true)
-                .catchError((_) => <VideoSource>[]);
+            // plays, 20s at p90). Resolve it through the playback resolver
+            // and KEEP the winner: the source and links are saved per episode,
+            // so the next Play opens on the first working link instead of
+            // sweeping, and the remaining mirrors arrive through polling.
+            // Fire-and-forget; a failure just means the next Play does the
+            // work itself, exactly as it did before.
+            unawaited(
+              sl<PlaybackResolver>().prefetchEpisode(
+                nextUrl,
+                category: _activeCategory,
+              ),
+            );
           } else {
             sl<SourceRepository>().prefetch(nextUrl, sourceId: sourceId);
           }
@@ -2257,6 +2275,8 @@ class PlayerCubit extends Cubit<PlayerState> {
         currentIndex: index,
         error: () => null,
         loadingSources: true,
+        sweepChecked: 0,
+        sweepTotal: 0,
         sources: const [],
         active: () => null,
       ),
@@ -2390,6 +2410,10 @@ class PlayerCubit extends Cubit<PlayerState> {
       sl<PlaybackResolver>().resolveProgressive(
         epUrl,
         category: _activeCategory,
+        onProgress: (p) {
+          if (gen != _gen || isClosed) return;
+          emit(state.copyWith(sweepChecked: p.checked, sweepTotal: p.total));
+        },
       ),
     );
     _progressive = it;

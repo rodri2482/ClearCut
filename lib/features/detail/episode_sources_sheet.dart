@@ -60,6 +60,8 @@ class _EpisodeSourcesBodyState extends State<_EpisodeSourcesBody> {
   /// Everything asked so far, so "Keep checking" resumes rather than restarts.
   final _asked = <String>{};
   StreamSubscription<SourceProbe>? _sub;
+
+  /// The source being asked right now, for the "Checking N of M" line.
   String? _checking;
   bool _done = false;
   late final int _total;
@@ -195,9 +197,12 @@ class _EpisodeSourcesBodyState extends State<_EpisodeSourcesBody> {
     // the 0 checked" would be a nonsense sentence in front of a new user.
     if (_total == 0) return 'No sources installed yet';
     if (!_done) {
-      return _checking == null
-          ? 'Checking your sources…'
-          : 'Checking $_checking…';
+      // The count is the point: "Checking 3 of 8 sources…" tells the viewer
+      // there is a queue moving, where a bare "Checking your sources…" reads
+      // the same at the start and at a stall. The name follows when known.
+      final next = (_asked.length + 1).clamp(1, _total);
+      final line = 'Checking $next of $_total sources…';
+      return _checking == null ? line : '$line $_checking';
     }
     final n = _found.length;
     if (n == 0) return 'None of the ${_asked.length} checked lists it';

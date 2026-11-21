@@ -25,6 +25,7 @@ import 'metadata_provider_prefs.dart';
 import 'simkl_catalogue.dart';
 import 'video_catalogue.dart';
 import 'match_store.dart';
+import 'episode_anchor_store.dart';
 import 'playback_resolver.dart';
 import 'source_matcher.dart';
 import 'source_score_store.dart';
@@ -43,6 +44,7 @@ class MetadataRepository implements CatalogueRepository {
     required SourceMatcher matcher,
     required MatchStore matchStore,
     required ZSourcePrefs sourcePrefs,
+    EpisodeAnchorStore? anchors,
     required ZKind Function() browseKind,
     List<({String id, String name})> Function(ZKind)? searchCandidates,
     MalCatalogue? mal,
@@ -76,6 +78,7 @@ class MetadataRepository implements CatalogueRepository {
          scores: sl.isRegistered<SourceScoreStore>()
              ? sl<SourceScoreStore>()
              : null,
+         anchors: anchors,
        ) {
     _bindPlayback();
   }

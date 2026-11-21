@@ -76,6 +76,7 @@ import '../watch_together/watch_together_controller.dart';
 import '../profiles/viewer_profiles_screen.dart';
 import '../onboarding/how_it_works.dart';
 import '../notify/subscriptions_screen.dart';
+import '../update/update_dialog.dart';
 import 'tracker_settings_screen.dart';
 import '../sources/source_health_screen.dart';
 import '../sources/sources_screen.dart';

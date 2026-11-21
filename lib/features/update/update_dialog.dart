@@ -21,13 +21,14 @@ Future<void> maybeShowUpdateDialog(
     if (manual) {
       final v = await service.currentVersion();
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            context.l10n.onLatestVersion(v.isEmpty ? '' : ' (v$v)'),
-          ),
-        ),
-      );
+      final message = service.lastError == 'no_public_releases'
+          ? 'No public release has been published for ClearCut yet.'
+          : service.lastError == 'network'
+          ? 'Could not reach GitHub. Check your connection and try again.'
+          : context.l10n.onLatestVersion(v.isEmpty ? '' : ' (v$v)');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
     return;
   }
@@ -199,9 +200,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               const SizedBox(height: 6),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 220),
-                child: SingleChildScrollView(
-                  child: _ReleaseNotes(notes),
-                ),
+                child: SingleChildScrollView(child: _ReleaseNotes(notes)),
               ),
               const SizedBox(height: 14),
             ],
@@ -219,7 +218,9 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               Text(
                 _progress! >= 1
                     ? context.l10n.startingInstaller
-                    : context.l10n.downloadingPercent((_progress! * 100).round()),
+                    : context.l10n.downloadingPercent(
+                        (_progress! * 100).round(),
+                      ),
                 style: AppText.caption,
               ),
               const SizedBox(height: 8),
@@ -304,41 +305,51 @@ class _ReleaseNotes extends StatelessWidget {
         case 'blank':
           widgets.add(const SizedBox(height: 8));
         case 'hr':
-          widgets.add(Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: Divider(
-              color: AppColors.textTertiary.withValues(alpha: 0.3),
-              height: 1,
-            ),
-          ));
-        case 'header':
-          widgets.add(Padding(
-            padding: const EdgeInsets.only(top: 4, bottom: 2),
-            child: Text.rich(_inline(
-              b.text,
-              base.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-                fontSize: b.level <= 1 ? 16 : (b.level == 2 ? 15 : 14),
+          widgets.add(
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Divider(
+                color: AppColors.textTertiary.withValues(alpha: 0.3),
+                height: 1,
               ),
-            )),
-          ));
-        case 'bullet':
-          widgets.add(Padding(
-            padding: const EdgeInsets.only(bottom: 3),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('•  ', style: base),
-                Expanded(child: Text.rich(_inline(b.text, base))),
-              ],
             ),
-          ));
+          );
+        case 'header':
+          widgets.add(
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 2),
+              child: Text.rich(
+                _inline(
+                  b.text,
+                  base.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: b.level <= 1 ? 16 : (b.level == 2 ? 15 : 14),
+                  ),
+                ),
+              ),
+            ),
+          );
+        case 'bullet':
+          widgets.add(
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('•  ', style: base),
+                  Expanded(child: Text.rich(_inline(b.text, base))),
+                ],
+              ),
+            ),
+          );
         default:
-          widgets.add(Padding(
-            padding: const EdgeInsets.only(bottom: 3),
-            child: Text.rich(_inline(b.text, base)),
-          ));
+          widgets.add(
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Text.rich(_inline(b.text, base)),
+            ),
+          );
       }
     }
     return Column(
@@ -388,23 +399,29 @@ class _ReleaseNotes extends StatelessWidget {
         spans.add(TextSpan(text: delinked.substring(i, m.start), style: style));
       }
       if (m.group(2) != null) {
-        spans.add(TextSpan(
-          text: m.group(2),
-          style: style.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
+        spans.add(
+          TextSpan(
+            text: m.group(2),
+            style: style.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ));
+        );
       } else if (m.group(4) != null) {
-        spans.add(TextSpan(
-          text: m.group(4),
-          style: style.copyWith(fontStyle: FontStyle.italic),
-        ));
+        spans.add(
+          TextSpan(
+            text: m.group(4),
+            style: style.copyWith(fontStyle: FontStyle.italic),
+          ),
+        );
       } else if (m.group(5) != null) {
-        spans.add(TextSpan(
-          text: m.group(5),
-          style: style.copyWith(fontFamily: 'monospace', color: Colors.white),
-        ));
+        spans.add(
+          TextSpan(
+            text: m.group(5),
+            style: style.copyWith(fontFamily: 'monospace', color: Colors.white),
+          ),
+        );
       }
       i = m.end;
     }

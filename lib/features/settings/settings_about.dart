@@ -41,6 +41,12 @@ class _AboutSettingsScreenState extends State<AboutSettingsScreen> {
             children: [
               SettingsTile(
                 autofocus: true,
+                icon: Icons.system_update_rounded,
+                title: context.l10n.checkForUpdates,
+                subtitle: context.l10n.checkForUpdatesSubtitle,
+                onTap: () => maybeShowUpdateDialog(context, manual: true),
+              ),
+              SettingsTile(
                 icon: Icons.code_rounded,
                 title: context.l10n.github,
                 subtitle: context.l10n.viewTheSourceCode,

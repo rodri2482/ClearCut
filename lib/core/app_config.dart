@@ -3,9 +3,11 @@
 /// rename (`flutter pub run rename` or manual android/ios edits).
 const String kAppName = 'ClearCut';
 
-/// In-app updater. Off: the ClearCut repo is private, so unauthenticated
-/// GitHub release checks can't see it. Turn on if the repo goes public.
-const bool kUpdaterEnabled = false;
+/// In-app updater. Checks the public GitHub Releases of this app's own repo
+/// and installs a newer APK when one is published. If the repo or its releases
+/// are private, the check reports that plainly instead of claiming the user is
+/// already up to date.
+const bool kUpdaterEnabled = true;
 
 /// Cloud accounts and sync. Off: ClearCut has no server of its own, so every
 /// sign-in prompt and account screen is hidden. Library, history and

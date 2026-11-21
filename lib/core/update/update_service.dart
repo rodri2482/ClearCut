@@ -56,29 +56,44 @@ class UpdateService {
 
   final Dio _dio = Dio();
 
+  /// Why the most recent [checkForUpdate] found nothing: `no_public_releases`
+  /// when GitHub answered 404 (private repo or no releases yet), otherwise a
+  /// short error tag. Null when a check succeeded. The Settings dialog uses it
+  /// so "no releases published" is not reported as "you're up to date".
+  String? lastError;
+
   /// Query GitHub for the latest release. Returns an [UpdateInfo] when it is
   /// newer than the installed version (and, when [respectSkip] is true, not the
   /// version the user chose to skip). Returns null on no-update or any error —
   /// callers must treat null as "nothing to do" (never throws).
   Future<UpdateInfo?> checkForUpdate({bool respectSkip = false}) async {
-    // ClearCut: the in-app updater is off (it pointed at upstream ClearCut).
     if (!kUpdaterEnabled) return null;
+    lastError = null;
     try {
       final beta = await betaOptIn();
-      final release =
-          beta ? await _newestBetaRelease() : await _latestStableRelease();
+      final release = beta
+          ? await _newestBetaRelease()
+          : await _latestStableRelease();
       if (release == null) return null;
 
       final rawTag = ((release['tag_name'] as String?) ?? '').trim();
       if (rawTag.isEmpty) return null;
       final version = rawTag.startsWith('v') ? rawTag.substring(1) : rawTag;
+      final assets = (release['assets'] as List?) ?? const [];
 
       final pkg = await PackageInfo.fromPlatform();
-      if (compareVersions(version, pkg.version) <= 0) return null;
+      // A release can carry a new build number on the same version string
+      // (1.0.12+13 → 1.0.12+14). Compare both, or the updater would miss every
+      // rebuild that did not bump the user-facing version.
+      final remoteBuild = _buildNumber(rawTag, assets);
+      final byVersion = compareVersions(version, pkg.version);
+      final byBuild = remoteBuild == null
+          ? 0
+          : remoteBuild.compareTo(int.tryParse(pkg.buildNumber) ?? 0);
+      if (byVersion <= 0 && byBuild <= 0) return null;
       if (respectSkip && await _skippedVersion() == version) return null;
 
-      final apk = _pickApk(
-          (release['assets'] as List?) ?? const [], await _deviceAbis());
+      final apk = _pickApk(assets, await _deviceAbis());
       if (apk == null) return null;
 
       return UpdateInfo(
@@ -89,9 +104,29 @@ class UpdateService {
         apkSize: apk.$3,
         isPrerelease: release['prerelease'] == true,
       );
+    } on DioException catch (e) {
+      lastError = e.response?.statusCode == 404
+          ? 'no_public_releases'
+          : 'network';
+      return null;
     } catch (_) {
+      lastError = 'network';
       return null;
     }
+  }
+
+  /// Build number stamped into a release tag (`v1.0.17+2007`) or, failing
+  /// that, into an APK asset name (`ClearCut-1.0.17-v2007-arm64-v8a.apk`).
+  static int? _buildNumber(String tag, List assets) {
+    final tagged = RegExp(r'\+(\d+)').firstMatch(tag);
+    if (tagged != null) return int.tryParse(tagged.group(1)!);
+    for (final a in assets) {
+      if (a is! Map) continue;
+      final name = (a['name'] as String?) ?? '';
+      final named = RegExp(r'-v(\d+)-').firstMatch(name);
+      if (named != null) return int.tryParse(named.group(1)!);
+    }
+    return null;
   }
 
   /// Latest **stable** release — GitHub's /releases/latest excludes
@@ -268,7 +303,9 @@ class UpdateService {
   static int compareVersions(String a, String b) {
     final pa = _parseVersion(a);
     final pb = _parseVersion(b);
-    final len = pa.core.length > pb.core.length ? pa.core.length : pb.core.length;
+    final len = pa.core.length > pb.core.length
+        ? pa.core.length
+        : pb.core.length;
     for (var i = 0; i < len; i++) {
       final x = i < pa.core.length ? pa.core[i] : 0;
       final y = i < pb.core.length ? pb.core[i] : 0;
@@ -290,8 +327,10 @@ class UpdateService {
     final dash = s.indexOf('-');
     final corePart = dash >= 0 ? s.substring(0, dash) : s;
     final label = dash >= 0 ? s.substring(dash + 1) : null;
-    final core =
-        corePart.split('.').map((e) => int.tryParse(e.trim()) ?? 0).toList();
+    final core = corePart
+        .split('.')
+        .map((e) => int.tryParse(e.trim()) ?? 0)
+        .toList();
     int? pre;
     if (label != null) {
       final m = RegExp(r'(\d+)').firstMatch(label);

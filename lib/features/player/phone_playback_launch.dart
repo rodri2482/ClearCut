@@ -23,6 +23,7 @@ import '../../core/models/provider_info.dart';
 import '../../core/models/episode.dart';
 import '../../core/models/video_source.dart';
 import '../../core/playback/network_quality.dart';
+import '../../core/playback/noflix_fallback.dart';
 import '../../core/playback/playback_prefs.dart';
 import '../../core/playback/title_prefs.dart';
 import '../../core/playback/resume_store.dart';
@@ -1198,28 +1199,40 @@ class PhoneNativePlayer {
           final args = _callArgs(call);
           final index = (args?['index'] as num?)?.toInt() ?? -1;
           if (index < 0 || index >= _episodes.length) return const <Map>[];
-          if (_sourceHops >= _maxSourceHops) return const <Map>[];
           final epUrl = _episodes[index].url;
           final canonical = ZmodeIds.parseShow(epUrl);
-          if (ZmodeIds.parseEpisode(epUrl) == null ||
-              canonical == null ||
-              !sl.isRegistered<PlaybackResolver>()) {
+          if (_cachedSourcesFor(
+                index,
+              )?.any((source) => source.label?.startsWith('NoFlix') == true) ==
+              true) {
             return const <Map>[];
           }
-          if (sl.isRegistered<SourceMatcher>() &&
+          if (canonical != null &&
+              sl.isRegistered<SourceMatcher>() &&
               sl<SourceMatcher>().pinnedSource(canonical) != null) {
             return const <Map>[];
           }
-          final resolver = sl<PlaybackResolver>();
-          final winner = resolver.resolvedSourceId(epUrl, category: _category);
-          if (winner == null) return const <Map>[];
-          _sourceHops++;
-          resolver.markSourceUnplayable(epUrl, winner, category: _category);
+          final resolver = sl.isRegistered<PlaybackResolver>()
+              ? sl<PlaybackResolver>()
+              : null;
+          final winner = resolver?.resolvedSourceId(epUrl, category: _category);
           _engineSources.remove(index);
           final session = _sessionId;
           final requestCategory = _category;
+          final episode = _episodes[index];
           try {
-            final sources = await _resolveSources(_episodes[index]);
+            final List<VideoSource> sources;
+            if (winner != null && _sourceHops < _maxSourceHops) {
+              _sourceHops++;
+              resolver!.markSourceUnplayable(
+                epUrl,
+                winner,
+                category: _category,
+              );
+              sources = await _resolveSources(episode);
+            } else {
+              sources = await _resolveNoFlix(episode);
+            }
             final prepared = _rememberEngineSources(
               index,
               await _prepareSources(sources),
@@ -1550,6 +1563,7 @@ class PhoneNativePlayer {
     unawaited(
       _resolveSources(
         _episodes[index + 1],
+        allowNoFlix: false,
       ).catchError((_) => const <VideoSource>[]),
     );
   }
@@ -1562,8 +1576,11 @@ class PhoneNativePlayer {
   static Future<List<VideoSource>> _resolveSources(
     Episode ep, {
     bool preferPolled = false,
+    bool allowNoFlix = true,
   }) async {
-    final url = tvEpisodeUrl(ep.url, _category);
+    final session = _sessionId;
+    final requestCategory = _category;
+    final url = tvEpisodeUrl(ep.url, requestCategory);
     if (preferPolled && _pollSources != null) {
       try {
         final deadline = DateTime.now().add(const Duration(seconds: 3));
@@ -1582,11 +1599,31 @@ class PhoneNativePlayer {
       }
     }
     try {
-      return await _resolve!(url);
+      final sources = await _resolve!(url);
+      if (sources.isNotEmpty) return sources;
     } catch (e) {
       debugPrint('[PhoneNativePlayer] resolve failed · $e');
+    }
+    if (!allowNoFlix || session != _sessionId || requestCategory != _category) {
       return const [];
     }
+    return _resolveNoFlix(ep);
+  }
+
+  static Future<List<VideoSource>> _resolveNoFlix(Episode episode) async {
+    if (!_allowDownloads || StremioRef.isRef(episode.url)) return const [];
+    final canonical = ZmodeIds.parseShow(_showUrl ?? episode.url);
+    if (canonical != null &&
+        sl.isRegistered<SourceMatcher>() &&
+        sl<SourceMatcher>().pinnedSource(canonical) != null) {
+      return const [];
+    }
+    return NoFlixFallback.instance.resolveTitle(
+      canonical: canonical,
+      tmdbId: _tmdbId,
+      isTv: _tmdbIsTv,
+      episode: episode,
+    );
   }
 
   static Future<List<VideoSource>> _prepareSources(

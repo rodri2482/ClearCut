@@ -99,6 +99,76 @@ void main() {
     await dir.delete(recursive: true);
   });
 
+  group('matchOn cache safety', () {
+    test(
+      'a cached match naming another title is discarded and re-searched',
+      () async {
+        final repo = _FakeSources({
+          'allanime': [_hit('allanime', 'Fullmetal Alchemist Brotherhood')],
+        });
+        final matcher = SourceMatcher(
+          sources: repo,
+          store: store,
+          prefs: prefs,
+          candidates: (_) => two,
+        );
+        // A stale match saved under FMA's canonical id but pointing at a
+        // completely different show — exactly the "wrong movie" report.
+        await store.save(
+          fma,
+          const SourceMatch(
+            sourceId: 'allanime',
+            showUrl: 'https://allanime/naruto',
+            showId: 'naruto',
+            showTitle: 'Naruto',
+            pinned: false,
+          ),
+        );
+
+        final r = await matcher.matchOn(
+          fma,
+          'allanime',
+          title: 'Fullmetal Alchemist: Brotherhood',
+        );
+
+        expect(r?.showTitle, 'Fullmetal Alchemist Brotherhood');
+        expect(repo.searched, ['allanime'], reason: 'a fresh search must run');
+      },
+    );
+
+    test(
+      'a pinned match is honoured even when the source uses a variant title',
+      () async {
+        final repo = _FakeSources({
+          'allanime': [_hit('allanime', 'Something else')],
+        });
+        final matcher = SourceMatcher(
+          sources: repo,
+          store: store,
+          prefs: prefs,
+          candidates: (_) => two,
+        );
+        await store.pin(
+          fma,
+          const SourceMatch(
+            sourceId: 'allanime',
+            showUrl: 'https://allanime/fma',
+            showId: 'fma',
+            showTitle: 'FMA',
+            pinned: true,
+          ),
+        );
+        final r = await matcher.matchOn(
+          fma,
+          'allanime',
+          title: 'Fullmetal Alchemist: Brotherhood',
+        );
+        expect(r?.showTitle, 'FMA');
+        expect(repo.searched, isEmpty);
+      },
+    );
+  });
+
   group('resolveOn', () {
     test('matches on exactly the named source', () async {
       final repo = _FakeSources(

@@ -1566,7 +1566,15 @@ class _DetailViewState extends State<_DetailView>
     //
     // Every play path funnels through this method, so this one check covers
     // the row tap, the grid tile, the Play button and resume.
-    if (index >= 0 && index < episodes.length && !episodes[index].available) {
+    final canonical = ZmodeIds.parseShow(widget.item.url);
+    final automaticMoviePlayback =
+        Platform.isAndroid &&
+        canonical?.kind == ZKind.movie &&
+        sl<SourceMatcher>().pinnedSource(canonical!) == null;
+    if (index >= 0 &&
+        index < episodes.length &&
+        !episodes[index].available &&
+        !automaticMoviePlayback) {
       final sweep = await showEpisodeUnavailable(
         context,
         episodes[index],
@@ -2440,6 +2448,23 @@ class _DetailViewState extends State<_DetailView>
     final hasAnyMark = eps.any(
       (e) => store.get(item.sourceId, item.url, e.id) != null,
     );
+    final canonical = ZmodeIds.parseShow(item.url);
+    final playEpisodes =
+        !state.episodesLoading &&
+            eps.isEmpty &&
+            !isReading &&
+            Platform.isAndroid &&
+            canonical?.kind == ZKind.movie &&
+            canonical!.id.startsWith('tmdb:')
+        ? [
+            Episode(
+              id: '1',
+              title: detail.title,
+              number: 1,
+              url: ZmodeIds.episodeUrl(canonical, 1),
+            ),
+          ]
+        : eps;
     final episodeNum = eps.isNotEmpty
         ? (eps[resumeIdx].number?.toInt() ?? resumeIdx + 1)
         : 1;
@@ -2781,12 +2806,13 @@ class _DetailViewState extends State<_DetailView>
                   icon: isReading
                       ? Icons.menu_book_rounded
                       : Icons.play_arrow_rounded,
-                  // Playback always stays inside ClearCut. There is no
-                  // external web-player fallback: a title with no source is
-                  // simply not playable, which is honest and keeps the viewer
-                  // out of other people's sites.
-                  onPressed: eps.isNotEmpty
-                      ? () => _openPlayer(eps, resumeIdx, detail, category)
+                  onPressed: playEpisodes.isNotEmpty
+                      ? () => _openPlayer(
+                          playEpisodes,
+                          resumeIdx,
+                          detail,
+                          category,
+                        )
                       : null,
                 ),
               ),

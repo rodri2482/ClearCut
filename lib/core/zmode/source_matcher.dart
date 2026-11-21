@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../error/exceptions.dart';
 import '../models/media_item.dart';
+import '../models/provider_info.dart';
 import '../provider/cf_solve_needed.dart';
 import '../repository/source_repository.dart';
 import 'match_store.dart';
@@ -287,16 +288,48 @@ class SourceMatcher {
     // ask again rather than handing back a match with nowhere to point.
     final savedIsMatch = saved != null && saved.showUrl.isNotEmpty;
     if (savedIsMatch && (saved.pinned || _sources.hasSource(sourceId))) {
-      // Even with a cached match, the runtime may be empty on TV — ensure
-      // the provider is loaded so episodes()/sources() can resolve.
-      final loaded = await _sources.ensureSourceLoaded(sourceId);
-      if (abandoned?.call() ?? false) return null;
+      // A cached match is only trusted when it still names THIS title. The
+      // store is keyed by canonical id, so a match saved while resolving a
+      // different work (or a source that renamed its page) can sit there with
+      // the wrong showUrl — and every later tap silently opened that other
+      // movie. Re-check the saved showTitle with the same rule a fresh search
+      // uses; on a mismatch, drop through and search again.
+      // An explicit per-title pin or kind-wide default is a deliberate
+      // choice — keep honouring it even if the source's own title text is
+      // abbreviated. Only auto-resolved guesses get re-validated.
+      final explicitChoice = saved.pinned || sourceForTitle(c) != null;
+      final stillRight =
+          explicitChoice ||
+          titleMatches(
+            MediaItem(
+              id: saved.showId,
+              title: saved.showTitle,
+              url: saved.showUrl,
+              type: ProviderType.movie,
+              sourceId: saved.sourceId,
+            ),
+            title,
+            altTitle: altTitle,
+            metadataAliases: metadataAliases,
+            wantedMalId: malId,
+          );
+      if (stillRight) {
+        // Even with a cached match, the runtime may be empty on TV — ensure
+        // the provider is loaded so episodes()/sources() can resolve.
+        final loaded = await _sources.ensureSourceLoaded(sourceId);
+        if (abandoned?.call() ?? false) return null;
+        debugPrint(
+          '[source-matcher] matchOn · "$sourceId" → cached '
+          '(pinned=${saved.pinned} installed=${_sources.hasSource(sourceId)} '
+          'loaded=$loaded) "${saved.showTitle}"',
+        );
+        return loaded ? saved : null;
+      }
       debugPrint(
-        '[source-matcher] matchOn · "$sourceId" → cached '
-        '(pinned=${saved.pinned} installed=${_sources.hasSource(sourceId)} '
-        'loaded=$loaded)',
+        '[source-matcher] matchOn · "$sourceId" → STALE cached match '
+        '"${saved.showTitle}" for "$title" — re-searching',
       );
-      return loaded ? saved : null;
+      await _store.forget(c, sourceId);
     }
     if (!_sources.hasSource(sourceId)) {
       debugPrint(

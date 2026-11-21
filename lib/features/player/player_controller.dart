@@ -27,6 +27,7 @@ import '../../core/models/provider_info.dart';
 import '../../core/models/video_source.dart';
 import '../../core/playback/hls.dart';
 import '../../core/playback/network_quality.dart';
+import '../../core/playback/noflix_fallback.dart';
 import '../../core/playback/playback_prefs.dart';
 import '../../core/playback/source_health_store.dart';
 import '../../core/playback/filler_service.dart';
@@ -541,6 +542,7 @@ class PlayerCubit extends Cubit<PlayerState> {
   /// True while the open source is a local file (download). Read by
   /// [_tryNextSource]; set on every [_open].
   bool _openedLocalFile = false;
+  bool _noFlixAttempted = false;
   bool _softwareDecodeRetried = false;
   bool _softwareDecodeRetryInProgress = false;
   int? _softwareDecodeRetryGeneration;
@@ -725,6 +727,7 @@ class PlayerCubit extends Cubit<PlayerState> {
     final keepPos = _lastPos;
     _tried.clear();
     _sourceHops = 0; // a different cut is a fresh set of sources
+    _noFlixAttempted = false;
     _recovering = false;
     emit(
       state.copyWith(
@@ -2285,6 +2288,7 @@ class PlayerCubit extends Cubit<PlayerState> {
     if (index != state.currentIndex) _pendingResume = Duration.zero;
     _tried.clear();
     _sourceHops = 0;
+    _noFlixAttempted = false;
     _recovering = false;
     _skips = const []; // clear previous episode's skip markers
     _skipsForIndex = -1; // refetched when the new duration arrives
@@ -2342,10 +2346,13 @@ class PlayerCubit extends Cubit<PlayerState> {
         await _openProgressive(epUrl, gen);
       } else {
         final resolved = await _resolveNoted(epUrl);
-        if (gen != _gen) return; // superseded by a newer open
+        if (gen != _gen || isClosed) return;
+        if (resolved.isEmpty && await _tryNoFlix(gen)) return;
+        if (gen != _gen || isClosed) return;
         await _openResolved(resolved, gen);
       }
     } on NoSourceMatch catch (e) {
+      if (await _tryNoFlix(gen)) return;
       // No BuildContext down here to call context.l10n — this mirrors
       // AppLocalizationsEn.noSourceHasThisYet verbatim.
       final message = e.selectedSourceName == null
@@ -2358,6 +2365,7 @@ class PlayerCubit extends Cubit<PlayerState> {
       if (gen != _gen || isClosed) return;
       emit(state.copyWith(loadingSources: false, error: () => message));
     } on EpisodeNotAvailable catch (e) {
+      if (await _tryNoFlix(gen)) return;
       // Auto Resolve swept every installed source and none could serve this
       // episode. Worth saying which of the two it was: nothing has the show at
       // all, or something has it but not this episode — those send the viewer
@@ -2380,6 +2388,7 @@ class PlayerCubit extends Cubit<PlayerState> {
       if (gen != _gen || isClosed) return;
       emit(state.copyWith(loadingSources: false, error: () => message));
     } on EpisodeNotOnSource catch (e) {
+      if (await _tryNoFlix(gen)) return;
       // The show matched fine — this one episode just isn't on that source.
       // Its own toString() carries the canonical (a raw storage key), so
       // build the message by hand instead of interpolating $e.
@@ -2399,6 +2408,46 @@ class PlayerCubit extends Cubit<PlayerState> {
         ),
       );
     }
+  }
+
+  Future<bool> _tryNoFlix(int gen) async {
+    if (gen != _gen || isClosed) return true;
+    if (!Platform.isAndroid ||
+        localOnly ||
+        _openedLocalFile ||
+        _noFlixAttempted ||
+        sourceId == stremioSourceId ||
+        initialSource != null) {
+      return false;
+    }
+
+    final show = ZmodeIds.parseShow(showUrl ?? '');
+    if (show != null && show.kind != ZKind.movie && show.kind != ZKind.tv) {
+      return false;
+    }
+    if (show != null &&
+        sl.isRegistered<SourceMatcher>() &&
+        sl<SourceMatcher>().pinnedSource(show) != null) {
+      return false;
+    }
+    if (tmdbId == null && show?.id.startsWith('tmdb:') != true) return false;
+
+    _noFlixAttempted = true;
+    _toast('Checking NoFlix…');
+    final streams = await NoFlixFallback.instance.resolveTitle(
+      canonical: show,
+      tmdbId: tmdbId,
+      isTv: tmdbIsTv,
+      episode: currentEpisode,
+    );
+    if (gen != _gen || isClosed) return true;
+    final fresh = streams
+        .where((stream) => !_tried.contains(stream.url))
+        .toList();
+    if (fresh.isEmpty) return false;
+    await _cancelProgressive();
+    if (gen != _gen || isClosed) return true;
+    return _openResolved(fresh, gen, pollForMirrors: false);
   }
 
   /// Progressive Play applies to metadata (`zm://`) episodes with a resolver
@@ -2473,7 +2522,11 @@ class PlayerCubit extends Cubit<PlayerState> {
   /// Opens playback on an already-resolved list — the tail of [openEpisode]
   /// shared by the one-shot resolve and the progressive first event, so both
   /// open identically. Returns false when nothing was pickable (error shown).
-  Future<bool> _openResolved(List<VideoSource> resolved, int gen) async {
+  Future<bool> _openResolved(
+    List<VideoSource> resolved,
+    int gen, {
+    bool pollForMirrors = true,
+  }) async {
     final blocked = engineFallback?.blockedUrls(
       currentEpisode.url,
       _activeCategory,
@@ -2531,11 +2584,12 @@ class PlayerCubit extends Cubit<PlayerState> {
     // Playback is running — collect the mirrors that resolved after the fast
     // return, so the Sources sheet ends up complete. Started here rather than
     // alongside the open above so it can't compete with the stream starting.
-    if (!_openedLocalFile) {
+    if (pollForMirrors && !_openedLocalFile) {
       unawaited(_pollForMoreSources(_episodeUrl(currentEpisode)));
     }
-    if (roomRole == RoomRole.host)
+    if (roomRole == RoomRole.host) {
       onLocalPlayback?.call('episode', Duration.zero);
+    }
     return true;
   }
 
@@ -3440,7 +3494,7 @@ class PlayerCubit extends Cubit<PlayerState> {
       _toast("That one didn't cut. Trying another source.");
       await _open(next, seekTo: _lastPos);
       _applyDefaultQuality(); // honor the quality pref on the fallback source too
-    } else if (!await _tryNextSource()) {
+    } else if (!await _tryNextSource() && !await _tryNoFlix(gen)) {
       // Guarded, not returned: _recovering still has to drop, or a player that
       // outlives this (a newer open on the same cubit) can never recover again.
       if (gen == _gen) {
@@ -3703,7 +3757,7 @@ class PlayerCubit extends Cubit<PlayerState> {
       );
       // A source whose every mirror stalls is as unplayable as one whose links
       // 404 — same fallthrough to the next source rather than ending here.
-      if (!await _tryNextSource()) {
+      if (!await _tryNextSource() && !await _tryNoFlix(engineGen)) {
         // Same reason as the dead end above: a stalled player left running
         // keeps retrying behind the message.
         await _stopQuietly();

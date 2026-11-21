@@ -54,6 +54,39 @@ Future<bool> isOfflineErrorConfirmed(Object? error) async {
   return !await hasRouteOut();
 }
 
+/// A cheap read on why a sweep of sources timed out. It deliberately uses a
+/// neutral host, so a broken source cannot look like a broken connection.
+enum ConnectionQuality { good, slow, offline, unknown }
+
+/// Resolve a neutral hostname and measure how long it took.
+///
+/// Fast and reachable → [ConnectionQuality.good]; reachable but slow →
+/// [ConnectionQuality.slow]; unreachable → [ConnectionQuality.offline]. This is
+/// only called on the error path, after sources have already spent their
+/// budgets, so the extra lookup costs nothing on a healthy Play.
+Future<ConnectionQuality> checkConnectionQuality() async {
+  final sw = Stopwatch()..start();
+  try {
+    final addresses = await lookupForQuality().timeout(
+      const Duration(seconds: 4),
+    );
+    sw.stop();
+    if (addresses.isEmpty) return ConnectionQuality.offline;
+    return sw.elapsed > const Duration(milliseconds: 1800)
+        ? ConnectionQuality.slow
+        : ConnectionQuality.good;
+  } on Object {
+    return ConnectionQuality.offline;
+  }
+}
+
+/// Neutral lookup used by [checkConnectionQuality]. Swappable so tests can
+/// answer without real DNS.
+Future<List<InternetAddress>> Function() lookupForQuality = _lookupNeutral;
+
+Future<List<InternetAddress>> _lookupNeutral() =>
+    InternetAddress.lookup('one.one.one.one');
+
 /// Whether a name we don't control still resolves. Swappable so tests can
 /// answer without real DNS.
 Future<bool> Function() hasRouteOut = _lookupSucceeds;

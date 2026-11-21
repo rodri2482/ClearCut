@@ -257,7 +257,10 @@ class SourceMatcher {
       final key = normalizeTitle(query);
       if (query.isEmpty || key.isEmpty || !seen.add(key)) continue;
       queries.add(query);
-      if (queries.length == 3) break;
+      // A title often has several legitimate names — romaji, English
+      // theatrical, TV broadcast, original language. Three used to cut off
+      // exactly the English title a movie was released under.
+      if (queries.length == 6) break;
     }
     return queries;
   }

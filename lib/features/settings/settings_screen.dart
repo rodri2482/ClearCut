@@ -51,7 +51,6 @@ import 'poster_card_settings_screen.dart';
 import 'home_rows_screen.dart';
 import 'nav_tabs_screen.dart';
 import 'reader_settings_screen.dart';
-import 'discord_settings_screen.dart';
 import 'torrent_settings_screen.dart';
 import '../../core/provider/provider_downloader.dart';
 import '../../core/provider/provider_registry.dart';
@@ -886,18 +885,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (mounted) setState(() {});
       },
     ),
-    if (!_isTv || !isAppleTv)
-      _SettingsEntry(
-        section: SettingsSection.account,
-        icon: Icons.gamepad_outlined,
-        title: l10n.discord,
-        subtitle: l10n.discordSubtitle,
-        keywords: 'discord rich presence',
-        onTap: () async {
-          await _push(const DiscordSettingsScreen());
-          if (mounted) setState(() {});
-        },
-      ),
     if (WatchTogetherController.isEnabled)
       _SettingsEntry(
         section: SettingsSection.account,
@@ -1327,18 +1314,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       keywords: 'logs share diagnostic debug bug report crash',
       onTap: _sendLogReport,
     ),
-    // About — a single destination holding the app info, contributors,
-    // social links, updates, beta toggle and support (so the section opens
-    // straight to it — no nested "About" sub-page).
+    // About — app version, the update checker and the in-app guide. Social,
+    // source and legal rows are intentionally not shown.
     _SettingsEntry(
       section: SettingsSection.about,
       icon: Icons.info_outline_rounded,
       title: l10n.about,
       subtitle: 'v$kAppVersion',
       keywords:
-          'about version app info license developers credits team '
-          'contributors social discord telegram how it works guide '
-          'check updates upgrade latest beta prerelease support donate coffee',
+          'about version app info how it works guide '
+          'check for updates upgrade latest',
       onTap: () => _push(const AboutSettingsScreen()),
     ),
   ];

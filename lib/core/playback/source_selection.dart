@@ -1,4 +1,5 @@
 import 'network_quality.dart';
+import 'subtitle_language.dart';
 import '../models/video_source.dart';
 
 /// Parses a quality label like `'1080p'` into a comparable int (height in px).
@@ -67,9 +68,34 @@ VideoSource? pickDefault(
   List<VideoSource> sources, {
   AudioKind prefer = AudioKind.sub,
   String? preferQuality,
+  Language? preferLanguage,
 }) {
   if (sources.isEmpty) return null;
-  final preferred = sortByQuality(sourcesForKind(sources, prefer));
+  var candidates = prefer == AudioKind.unknown
+      ? sources
+      : sourcesForKind(sources, prefer);
+  if (candidates.isEmpty) candidates = sources;
+
+  // Most viewers want English, whether the stream carries English audio or
+  // only English subtitles. Rank those above other languages BEFORE quality,
+  // so a 720p English stream is chosen over a 1080p one the viewer cannot
+  // understand. A source with no language tags is untouched — never demote a
+  // stream just because the provider did not label it.
+  if (preferLanguage != null) {
+    final audio = candidates
+        .where((s) => matchesSourceLang(s.audioLang ?? '', preferLanguage))
+        .toList();
+    final subs = candidates
+        .where((s) => pickPreferredSub(s.subtitles, preferLanguage) != null)
+        .toList();
+    if (audio.isNotEmpty) {
+      candidates = audio;
+    } else if (subs.isNotEmpty) {
+      candidates = subs;
+    }
+  }
+
+  final preferred = sortByQuality(candidates);
   final pool = preferred.isNotEmpty ? preferred : sortByQuality(sources);
 
   final want = resolutionPx(preferQuality);

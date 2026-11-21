@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/app_mode.dart';
 import '../../core/di/injector.dart';
+import '../../core/error/network_failure.dart';
 import '../../core/discord/discord_presence.dart';
 import '../../core/discord/discord_rpc.dart';
 import '../../core/share/share_link.dart';
@@ -766,6 +767,7 @@ class PlayerCubit extends Cubit<PlayerState> {
         resolved,
         prefer: cat == 'dub' ? AudioKind.dub : AudioKind.sub,
         preferQuality: _preferredQuality(),
+        preferLanguage: _preferredStreamLanguage,
       );
       if (pick == null) {
         emit(
@@ -1468,6 +1470,7 @@ class PlayerCubit extends Cubit<PlayerState> {
       state.sources,
       prefer: k,
       preferQuality: _preferredQuality(),
+      preferLanguage: _preferredStreamLanguage,
     );
     if (s != null) await switchSource(s);
   }
@@ -2216,6 +2219,31 @@ class PlayerCubit extends Cubit<PlayerState> {
     return "Couldn't check every source\n$why";
   }
 
+  /// [sweepError], but when the sweep timed out, check a neutral host first so
+  /// the screen can tell a slow/offline connection apart from a bad source.
+  /// That distinction is the whole point of the Retry button: retrying a dead
+  /// network never helps, and blaming the network for a dead source is just as
+  /// misleading.
+  static Future<String> _sweepErrorChecked(
+    String settled,
+    List<SweepOutcome> outcomes,
+  ) async {
+    if (outcomes.any((o) => o.reason == SweepReason.timedOut)) {
+      switch (await checkConnectionQuality()) {
+        case ConnectionQuality.offline:
+          return 'No internet connection\n'
+              'Connect to Wi-Fi or mobile data, then tap Retry.';
+        case ConnectionQuality.slow:
+          return 'Your connection looks slow\n'
+              'Sources took too long to answer. Tap Retry or try another network.';
+        case ConnectionQuality.good:
+        case ConnectionQuality.unknown:
+          break;
+      }
+    }
+    return _sweepError(settled, outcomes);
+  }
+
   /// A selected source is intentionally the only one checked. Tell the viewer
   /// whether it missed or could not be checked, and how to request a sweep.
   static String _selectedSourceError(
@@ -2320,45 +2348,37 @@ class PlayerCubit extends Cubit<PlayerState> {
     } on NoSourceMatch catch (e) {
       // No BuildContext down here to call context.l10n — this mirrors
       // AppLocalizationsEn.noSourceHasThisYet verbatim.
-      if (gen != _gen) return;
-      emit(
-        state.copyWith(
-          loadingSources: false,
-          error: () => e.selectedSourceName == null
-              ? _sweepError('No source has this yet', e.outcomes)
-              : _selectedSourceError(
-                  e.selectedSourceName!,
-                  '${e.selectedSourceName} did not match this title.',
-                  e.outcomes,
-                ),
-        ),
-      );
+      final message = e.selectedSourceName == null
+          ? await _sweepErrorChecked('No source has this yet', e.outcomes)
+          : _selectedSourceError(
+              e.selectedSourceName!,
+              '${e.selectedSourceName} did not match this title.',
+              e.outcomes,
+            );
+      if (gen != _gen || isClosed) return;
+      emit(state.copyWith(loadingSources: false, error: () => message));
     } on EpisodeNotAvailable catch (e) {
       // Auto Resolve swept every installed source and none could serve this
       // episode. Worth saying which of the two it was: nothing has the show at
       // all, or something has it but not this episode — those send the viewer
       // somewhere different.
-      if (gen != _gen) return;
-      emit(
-        state.copyWith(
-          loadingSources: false,
-          error: () => e.selectedSourceName == null
-              ? _sweepError(
-                  e.hadTitleMatch
-                      ? "Episode ${e.episode} isn't available on any source yet"
-                      : 'No source has this yet',
-                  e.outcomes,
-                )
-              : _selectedSourceError(
-                  e.selectedSourceName!,
-                  e.hadTitleMatch
-                      ? "Episode ${e.episode} isn't available from "
-                            '${e.selectedSourceName}.'
-                      : '${e.selectedSourceName} did not match this title.',
-                  e.outcomes,
-                ),
-        ),
-      );
+      final message = e.selectedSourceName == null
+          ? await _sweepErrorChecked(
+              e.hadTitleMatch
+                  ? "Episode ${e.episode} isn't available on any source yet"
+                  : 'No source has this yet',
+              e.outcomes,
+            )
+          : _selectedSourceError(
+              e.selectedSourceName!,
+              e.hadTitleMatch
+                  ? "Episode ${e.episode} isn't available from "
+                        '${e.selectedSourceName}.'
+                  : '${e.selectedSourceName} did not match this title.',
+              e.outcomes,
+            );
+      if (gen != _gen || isClosed) return;
+      emit(state.copyWith(loadingSources: false, error: () => message));
     } on EpisodeNotOnSource catch (e) {
       // The show matched fine — this one episode just isn't on that source.
       // Its own toString() carries the canonical (a raw storage key), so
@@ -2498,6 +2518,7 @@ class PlayerCubit extends Cubit<PlayerState> {
           resolved,
           prefer: narrowTo,
           preferQuality: _preferredQuality(),
+          preferLanguage: _preferredStreamLanguage,
         );
     if (pick == null) {
       emit(
@@ -2556,6 +2577,15 @@ class PlayerCubit extends Cubit<PlayerState> {
     if (wanted == null) return;
     final nearVar = _nearestByRes(variants, (v) => v.quality, wanted);
     if (nearVar != null) selectQuality(nearVar);
+  }
+
+  /// The language to favour when several playable streams exist. English is
+  /// the fallback because that is what most viewers understand, whether the
+  /// stream carries English audio or just English subtitles. Auto/Off in
+  /// Settings means "no explicit language", so we still use English.
+  Language get _preferredStreamLanguage {
+    final raw = sl<PlaybackPrefs>().preferredSubtitleLanguage;
+    return languageByPref(raw) ?? kSubtitleLanguages.first;
   }
 
   /// The resolution preference for the current title: its remembered pick if it
@@ -3509,7 +3539,11 @@ class PlayerCubit extends Cubit<PlayerState> {
       emit(state.copyWith(sources: resolved, error: () => null));
       final pick =
           _preferredSource(fresh) ??
-          pickDefault(fresh, preferQuality: _preferredQuality());
+          pickDefault(
+            fresh,
+            preferQuality: _preferredQuality(),
+            preferLanguage: _preferredStreamLanguage,
+          );
       if (pick == null) return false;
       await _open(pick, seekTo: _lastPos);
       if (gen != _gen) return true;
@@ -3653,6 +3687,7 @@ class PlayerCubit extends Cubit<PlayerState> {
       remaining,
       prefer: dead?.kind ?? AudioKind.sub,
       preferQuality: _preferredQuality(),
+      preferLanguage: _preferredStreamLanguage,
     );
     if (next != null) {
       _toast('Switching server…');

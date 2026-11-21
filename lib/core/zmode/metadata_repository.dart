@@ -107,6 +107,7 @@ class MetadataRepository implements CatalogueRepository {
 
   void _bindPlayback() {
     _playback.bindTitleLookup(titleFor);
+    _playback.bindAliasLookup(aliasesFor);
   }
 
   final AniListCatalogue _al;
@@ -187,6 +188,11 @@ class MetadataRepository implements CatalogueRepository {
   /// Titles seen on this run, so `sources()` can search by name without a
   /// second metadata round-trip.
   final _titles = <String, ({String title, String? alt, int? malId})>{};
+
+  /// Alternate titles for play-time source matching. The catalogue detail
+  /// screen had these but playback threw them away, so a source listing a film
+  /// under its English theatrical title could never be found.
+  final _aliases = <String, List<String>>{};
 
   /// The sub/dub cut each show was last opened as, by canonical key.
   ///
@@ -779,10 +785,12 @@ class MetadataRepository implements CatalogueRepository {
         ? await _viaVideo((x) => x.detail(c), prefer: prefer)
         : await _viaAnime((x) => x.detail(c), prefer: prefer);
     final metadataAliases = [
+      if (d.englishTitle != null) d.englishTitle!,
       if (d.nativeTitle != null) d.nativeTitle!,
       ...d.synonyms,
     ];
     _titles[c.key] = (title: d.title, alt: d.englishTitle, malId: d.malId);
+    _aliases[c.key] = metadataAliases;
     AppLogger.instance.log(
       '[metadata] detail catalogue title="${d.title}" eps=${d.episodes.length} '
       '${sw.elapsedMilliseconds}ms',
@@ -1144,9 +1152,17 @@ class MetadataRepository implements CatalogueRepository {
     return t;
   }
 
+  /// Alternate titles cached from the catalogue detail screen. Empty when the
+  /// user jumped straight into playback without opening Detail — in that case
+  /// the resolver falls back to the title + alt it already has.
+  Future<List<String>> aliasesFor(ZCanonical c) async =>
+      _aliases[c.key] ?? const <String>[];
+
   void _remember(MediaItem i) {
     final c = ZmodeIds.parseShow(i.url);
-    if (c != null)
+    if (c != null) {
       _titles[c.key] = (title: i.title, alt: i.englishTitle, malId: i.malId);
+      _aliases[c.key] = [if (i.englishTitle != null) i.englishTitle!];
+    }
   }
 }

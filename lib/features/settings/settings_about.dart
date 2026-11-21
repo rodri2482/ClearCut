@@ -1,4 +1,5 @@
-// About: version, source code, and the license / credits notice.
+// About: version and the in-app guide. Social, source and legal rows are not
+// shown here.
 part of 'settings_screen.dart';
 
 // ---------------------------------------------------------------------------
@@ -13,16 +14,6 @@ class AboutSettingsScreen extends StatefulWidget {
 }
 
 class _AboutSettingsScreenState extends State<AboutSettingsScreen> {
-  static const String _githubUrl = 'https://github.com/rodri2482/ClearCut';
-  static const String _licenseUrl = 'https://www.gnu.org/licenses/gpl-3.0.html';
-
-  Future<void> _open(String url) async {
-    final uri = Uri.parse(url);
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-      await launchUrl(uri, mode: LaunchMode.platformDefault);
-    }
-  }
-
   void _push(Widget screen) => Navigator.of(
     context,
   ).push(MaterialPageRoute<void>(builder: (_) => screen));
@@ -47,22 +38,10 @@ class _AboutSettingsScreenState extends State<AboutSettingsScreen> {
                 onTap: () => maybeShowUpdateDialog(context, manual: true),
               ),
               SettingsTile(
-                icon: Icons.code_rounded,
-                title: context.l10n.github,
-                subtitle: context.l10n.viewTheSourceCode,
-                onTap: () => _open(_githubUrl),
-              ),
-              SettingsTile(
                 icon: Icons.help_outline_rounded,
                 title: context.l10n.howItWorks,
                 subtitle: context.l10n.howItWorksSubtitle,
                 onTap: () => _push(const HowItWorksScreen()),
-              ),
-              SettingsTile(
-                icon: Icons.gavel_rounded,
-                title: 'License',
-                subtitle: 'GNU General Public License v3.0',
-                onTap: () => _open(_licenseUrl),
               ),
             ],
           ),
@@ -79,23 +58,6 @@ class _AboutSettingsScreenState extends State<AboutSettingsScreen> {
                 ),
               ],
             ),
-          const SizedBox(height: 24),
-          // Required notice (GPL-3.0 §5): this is a modified version, under
-          // the GPL, with no warranty. Credits the projects it is built on.
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Text(
-              '$kAppName is free software under the GNU GPL v3.0 and comes '
-              'with ABSOLUTELY NO WARRANTY. It is a modified version of '
-              'Zangetsu (GPL-3.0) and includes code from NoFlix (Apache-2.0). '
-              'See LICENSE and NOTICE.md in the source code.',
-              textAlign: TextAlign.center,
-              style: AppText.caption.copyWith(
-                color: AppColors.textTertiary,
-                height: 1.4,
-              ),
-            ),
-          ),
         ],
       ),
     );

@@ -490,9 +490,18 @@ class TmdbCatalogue implements VideoCatalogue {
     final m = await _get(isTv ? '/tv/$id' : '/movie/$id', const {});
     if (m == null) throw StateError('TMDB returned nothing for $c');
     final date = (isTv ? m['first_air_date'] : m['release_date']) as String?;
+    final displayTitle = (isTv ? m['name'] : m['title']) as String? ?? '';
+    final originalTitle =
+        (isTv ? m['original_name'] : m['original_title']) as String?;
     return MediaDetail(
       id: c.id,
-      title: (isTv ? m['name'] : m['title']) as String? ?? '',
+      title: displayTitle,
+      // TMDB used to leave this null, so play-time matching only ever tried
+      // the localized display title. The original title is usually the
+      // English/theatrical one sources list a released film under.
+      englishTitle: (originalTitle != null && originalTitle != displayTitle)
+          ? originalTitle
+          : null,
       cover: _poster(m['poster_path'] as String?),
       banner: _backdrop(m['backdrop_path'] as String?),
       url: ZmodeIds.showUrl(c),

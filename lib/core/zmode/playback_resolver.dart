@@ -235,6 +235,23 @@ class PlaybackResolver {
     _titleLookup = fn;
   }
 
+  /// Alternate titles (English theatrical name, native title, synonyms) from
+  /// the catalogue. Optional: tests and TV shells may not wire it.
+  Future<List<String>> Function(ZCanonical c)? _aliasLookup;
+
+  void bindAliasLookup(Future<List<String>> Function(ZCanonical c) fn) =>
+      _aliasLookup = fn;
+
+  Future<List<String>> _aliasesFor(ZCanonical c) async {
+    final fn = _aliasLookup;
+    if (fn == null) return const <String>[];
+    try {
+      return await fn(c);
+    } catch (_) {
+      return const <String>[];
+    }
+  }
+
   /// Cached winning source episode url per `zm://…/ep/n` for poll/prefetch.
   ///
   /// Keyed by url AND category: sub and dub are different episode lists for
@@ -1836,6 +1853,7 @@ class PlaybackResolver {
       title: t.title,
       altTitle: t.alt,
       malId: t.malId,
+      metadataAliases: await _aliasesFor(p.show),
     );
     if (match == null) return (null, null);
     final eps = await _sources.episodes(
@@ -1883,6 +1901,7 @@ class PlaybackResolver {
       title: t.title,
       altTitle: t.alt,
       malId: t.malId,
+      metadataAliases: await _aliasesFor(p.show),
     );
     if (match == null) {
       debugPrint('[playback] _resolve · $sourceId → no title match');

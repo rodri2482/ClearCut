@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:watch_app/core/models/video_source.dart';
 import 'package:watch_app/core/playback/source_selection.dart';
+import 'package:watch_app/core/playback/subtitle_language.dart';
 
 VideoSource _s(String q, AudioKind k) => VideoSource(
   url: 'https://x/$q',
@@ -46,6 +47,50 @@ void main() {
     final all = [_s('720p', AudioKind.dub)];
     expect(pickDefault(all, prefer: AudioKind.sub)!.kind, AudioKind.dub);
   });
+
+  test('pickDefault prefers English audio even at a lower quality', () {
+    final english = VideoSource(
+      url: 'https://x/en',
+      quality: '720p',
+      audioLang: 'English',
+      kind: AudioKind.sub,
+    );
+    final other = VideoSource(
+      url: 'https://x/de',
+      quality: '1080p',
+      audioLang: 'German',
+      kind: AudioKind.sub,
+    );
+    expect(
+      pickDefault(
+        [other, english],
+        prefer: AudioKind.sub,
+        preferLanguage: kSubtitleLanguages.first,
+      )!.url,
+      'https://x/en',
+    );
+  });
+
+  test(
+    'pickDefault accepts English subtitles when no English audio exists',
+    () {
+      final subbed = VideoSource(
+        url: 'https://x/subbed',
+        quality: '480p',
+        subtitles: const [Subtitle(url: 'https://x/en.vtt', lang: 'en')],
+        kind: AudioKind.sub,
+      );
+      final plain = _s('1080p', AudioKind.sub);
+      expect(
+        pickDefault(
+          [plain, subbed],
+          prefer: AudioKind.sub,
+          preferLanguage: kSubtitleLanguages.first,
+        )!.url,
+        'https://x/subbed',
+      );
+    },
+  );
 
   test('sourcesForKind filters', () {
     final all = [_s('720p', AudioKind.sub), _s('720p', AudioKind.dub)];

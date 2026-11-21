@@ -136,7 +136,7 @@ void main() {
   });
 
   test(
-    'automatic alias fallback is capped at three alternate searches',
+    'automatic alias fallback is capped at six alternate searches',
     () async {
       final repo = _ByQuery(const {});
 
@@ -153,7 +153,14 @@ void main() {
         ],
       );
 
-      expect(repo.asked, [romaji, english, 'Alias one', 'Alias two']);
+      expect(repo.asked, [
+        romaji,
+        english,
+        'Alias one',
+        'Alias two',
+        'Alias three',
+        'Alias four',
+      ]);
     },
   );
 

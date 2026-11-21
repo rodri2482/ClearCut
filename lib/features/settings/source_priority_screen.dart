@@ -51,7 +51,6 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
   late List<({String id, String name})> _sources = _ordered(ZKind.anime);
   late int _cap = _prefs.cap(ZKind.anime);
 
-
   /// What Auto Resolve actually sweeps, in the order it walks them.
   ///
   /// This is [sweepCandidates] itself — the sweep's own function, uncapped —
@@ -70,13 +69,10 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
   /// auto-ranked. It only decides whether there is anything to undo.
   bool get _hasPins => _prefs.get(ZKind.anime).isNotEmpty;
 
-
-
   void _refresh(ZKind kind) => setState(() {
     _sources = _ordered(ZKind.anime);
     _cap = _prefs.cap(ZKind.anime);
   });
-
 
   /// A one-word verdict from the health store, when it has one worth showing.
   /// Silent for a healthy source: a row of green "ok" labels is noise, and the
@@ -97,13 +93,21 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
     // Best-effort: a missing tag must never stop the screen from working.
     try {
       final b = categorizedSources();
-      for (final r in [...b.anime, ...b.movies, ...b.nsfw, ...b.manga, ...b.novel]) {
+      for (final r in [
+        ...b.anime,
+        ...b.movies,
+        ...b.nsfw,
+        ...b.manga,
+        ...b.novel,
+      ]) {
         out[r.id] = (
           label: r.label,
           repo: (r.repo?.isNotEmpty ?? false) ? r.repo : null,
         );
       }
-    } catch (_) {/* tags are cosmetic */}
+    } catch (_) {
+      /* tags are cosmetic */
+    }
     return out;
   }
 
@@ -189,9 +193,7 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
     ZKind kind,
     List<({String id, String name})> list, {
     required int placedAt,
-  }) => _prefs.set(kind, [
-    for (final s in list.take(placedAt + 1)) s.id,
-  ]);
+  }) => _prefs.set(kind, [for (final s in list.take(placedAt + 1)) s.id]);
 
   void _reorder(ZKind kind, int oldIndex, int newIndex) {
     final list = _sources;
@@ -275,34 +277,55 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
         child: Row(
           children: [
             Expanded(
-              child: Text.rich(
-                TextSpan(
-                  children: [
-                    const TextSpan(text: 'Try the top '),
-                    TextSpan(
-                      text: '$_cap',
+              child: _cap == SourceOrderPrefs.allSourcesCap
+                  ? Text(
+                      'Try every installed source',
                       style: AppText.body.copyWith(
-                        color: AppColors.accent,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
+                        color: AppColors.textPrimary,
+                      ),
+                    )
+                  : Text.rich(
+                      TextSpan(
+                        children: [
+                          const TextSpan(text: 'Try the top '),
+                          TextSpan(
+                            text: '$_cap',
+                            style: AppText.body.copyWith(
+                              color: AppColors.accent,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                            ),
+                          ),
+                          TextSpan(text: _cap == 1 ? ' source' : ' sources'),
+                        ],
+                      ),
+                      style: AppText.body.copyWith(
+                        color: AppColors.textPrimary,
                       ),
                     ),
-                    TextSpan(text: _cap == 1 ? ' source' : ' sources'),
-                  ],
-                ),
-                style: AppText.body.copyWith(color: AppColors.textPrimary),
-              ),
             ),
             if (_isTv) ...[
               _iconButton(
                 icon: Icons.remove_rounded,
                 semanticLabel: 'Try fewer sources',
-                onTap: () => _setCap(kind, _cap - 1),
+                onTap: () => _setCap(
+                  kind,
+                  _cap == SourceOrderPrefs.allSourcesCap
+                      ? kAutoResolveCap
+                      : _cap - 1,
+                ),
               ),
               _iconButton(
                 icon: Icons.add_rounded,
                 semanticLabel: 'Try more sources',
-                onTap: () => _setCap(kind, _cap + 1),
+                onTap: () => _setCap(
+                  kind,
+                  _cap == SourceOrderPrefs.allSourcesCap
+                      ? SourceOrderPrefs.allSourcesCap
+                      : (_cap >= kAutoResolveCap
+                            ? SourceOrderPrefs.allSourcesCap
+                            : _cap + 1),
+                ),
               ),
             ],
           ],
@@ -329,16 +352,32 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
                     activeTickMarkColor: Colors.transparent,
                     inactiveTickMarkColor: Colors.transparent,
                   ),
-                  child: Slider(
-                    value: _cap.toDouble(),
-                    min: SourceOrderPrefs.minCap.toDouble(),
-                    max: kAutoResolveCap.toDouble(),
-                    divisions: kAutoResolveCap - SourceOrderPrefs.minCap,
-                    onChanged: (v) => _setCap(kind, v.round()),
+                  child: AbsorbPointer(
+                    absorbing: _cap == SourceOrderPrefs.allSourcesCap,
+                    child: Slider(
+                      value:
+                          (_cap == SourceOrderPrefs.allSourcesCap
+                                  ? kAutoResolveCap
+                                  : _cap)
+                              .toDouble(),
+                      min: SourceOrderPrefs.minCap.toDouble(),
+                      max: kAutoResolveCap.toDouble(),
+                      divisions: kAutoResolveCap - SourceOrderPrefs.minCap,
+                      onChanged: (v) => _setCap(kind, v.round()),
+                    ),
                   ),
                 ),
               ),
-              _sliderEnd('$kAutoResolveCap'),
+              _sliderEnd(
+                'All',
+                active: _cap == SourceOrderPrefs.allSourcesCap,
+                onTap: () => _setCap(
+                  kind,
+                  _cap == SourceOrderPrefs.allSourcesCap
+                      ? kAutoResolveCap
+                      : SourceOrderPrefs.allSourcesCap,
+                ),
+              ),
             ],
           ),
         ),
@@ -346,23 +385,39 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
         padding: const EdgeInsets.fromLTRB(16, 2, 16, 14),
         child: Text(
           'Auto Resolve tries them in order and stops at the first one that '
-          'has the title. Fewer means Play starts sooner when nothing has it.',
+          'has the title. Drag for 3–$kAutoResolveCap, or tap All to check '
+          'every installed source — slower when nothing has the title, but '
+          "it won't miss one further down the list.",
           style: AppText.caption.copyWith(color: AppColors.textTertiary),
         ),
       ),
     ],
   );
 
-  Widget _sliderEnd(String n) => Text(
-    n,
-    style: AppText.caption.copyWith(
-      color: AppColors.textTertiary,
-      fontFeatures: const [FontFeature.tabularFigures()],
-    ),
-  );
+  Widget _sliderEnd(String n, {bool active = false, VoidCallback? onTap}) {
+    final label = Text(
+      n,
+      style: AppText.caption.copyWith(
+        color: active ? AppColors.accent : AppColors.textTertiary,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      ),
+    );
+    if (onTap == null) return label;
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: label,
+      ),
+    );
+  }
 
   Future<void> _setCap(ZKind kind, int n) async {
-    final next = n.clamp(SourceOrderPrefs.minCap, kAutoResolveCap);
+    // `all` is a sentinel, not a count — clamping it would silently turn
+    // "scan everything" back into the old 20-source cap.
+    final next = n == SourceOrderPrefs.allSourcesCap
+        ? n
+        : n.clamp(SourceOrderPrefs.minCap, kAutoResolveCap);
     if (next == _cap) return;
     setState(() => _cap = next);
     await _prefs.setCap(kind, next);
@@ -421,24 +476,24 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
       );
     }
     return _listSurface([
-        if (_isTv)
-          Column(
-            children: [
-              for (var i = 0; i < list.length; i++)
-                _tvRow(kind, list[i], i, list.length),
-            ],
-          )
-        else
-          ReorderableListView(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            buildDefaultDragHandles: false,
-            onReorderItem: (oldIndex, newIndex) =>
-                _reorder(kind, oldIndex, newIndex),
-            children: [
-              for (var i = 0; i < list.length; i++) _row(kind, list[i], i),
-            ],
-          ),
+      if (_isTv)
+        Column(
+          children: [
+            for (var i = 0; i < list.length; i++)
+              _tvRow(kind, list[i], i, list.length),
+          ],
+        )
+      else
+        ReorderableListView(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          buildDefaultDragHandles: false,
+          onReorderItem: (oldIndex, newIndex) =>
+              _reorder(kind, oldIndex, newIndex),
+          children: [
+            for (var i = 0; i < list.length; i++) _row(kind, list[i], i),
+          ],
+        ),
     ]);
   }
 
@@ -603,9 +658,6 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
     );
   }
 
-
-
-
   /// TV row: up/down arrows instead of a drag handle — dragging isn't
   /// D-pad-drivable, so this is the only way to reorder with a remote.
   Widget _tvRow(
@@ -624,47 +676,50 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 22,
-            child: Text(
-              '${index + 1}',
-              style: AppText.caption.copyWith(
-                color: tried
-                    ? AppColors.textSecondary
-                    : AppColors.textTertiary,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 22,
+                child: Text(
+                  '${index + 1}',
+                  style: AppText.caption.copyWith(
+                    color: tried
+                        ? AppColors.textSecondary
+                        : AppColors.textTertiary,
+                  ),
+                ),
               ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Opacity(
-              opacity: tried ? 1 : 0.45,
-              child: _nameAndRepo(
-                s,
-                color: AppColors.textPrimary,
-                reason: _reasonFor(s.id),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Opacity(
+                  opacity: tried ? 1 : 0.45,
+                  child: _nameAndRepo(
+                    s,
+                    color: AppColors.textPrimary,
+                    reason: _reasonFor(s.id),
+                  ),
+                ),
               ),
-            ),
+              if (_health(s.id) case final h?) ...[
+                _healthChip(h),
+                const SizedBox(width: 4),
+              ],
+              _tvMoveButton(
+                icon: Icons.keyboard_arrow_up_rounded,
+                enabled: index > 0,
+                semanticLabel: 'Move ${_labelFor(s)} up',
+                onTap: () => _move(kind, index, -1),
+              ),
+              const SizedBox(width: 6),
+              _tvMoveButton(
+                icon: Icons.keyboard_arrow_down_rounded,
+                enabled: index < count - 1,
+                semanticLabel: 'Move ${_labelFor(s)} down',
+                onTap: () => _move(kind, index, 1),
+              ),
+            ],
           ),
-          if (_health(s.id) case final h?) ...[_healthChip(h), const SizedBox(width: 4)],
-          _tvMoveButton(
-            icon: Icons.keyboard_arrow_up_rounded,
-            enabled: index > 0,
-            semanticLabel: 'Move ${_labelFor(s)} up',
-            onTap: () => _move(kind, index, -1),
-          ),
-          const SizedBox(width: 6),
-          _tvMoveButton(
-            icon: Icons.keyboard_arrow_down_rounded,
-            enabled: index < count - 1,
-            semanticLabel: 'Move ${_labelFor(s)} down',
-            onTap: () => _move(kind, index, 1),
-          ),
-        ],
-      ),
         ),
         if (atCut) _cutLine(),
       ],

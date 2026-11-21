@@ -74,7 +74,9 @@ class _FakeOrderPrefs implements SourceOrderPrefs {
   int cap(ZKind kind) => _cap;
   @override
   Future<void> setCap(ZKind kind, int n) async {
-    _cap = n.clamp(SourceOrderPrefs.minCap, kAutoResolveCap);
+    _cap = n == SourceOrderPrefs.allSourcesCap
+        ? n
+        : n.clamp(SourceOrderPrefs.minCap, kAutoResolveCap);
   }
 }
 
@@ -136,6 +138,14 @@ void main() {
   test('a cap of 20 includes sources beyond the former limit', () {
     orderPrefs.setCap(ZKind.anime, 20);
     expect(sweepList(ZKind.anime).length, 20);
+  });
+
+  test('the All setting survives the clamp and scans every source', () {
+    orderPrefs.setCap(ZKind.anime, SourceOrderPrefs.allSourcesCap);
+    expect(orderPrefs.cap(ZKind.anime), SourceOrderPrefs.allSourcesCap);
+    // A negative sentinel passed to take() would mean an empty sweep. This is
+    // the regression the settings toggle exists to prevent.
+    expect(sweepList(ZKind.anime).length, orderedCandidates(ZKind.anime).length);
   });
 
   test('Auto Resolve defaults to 10 and permits up to 20 sources', () {

@@ -278,8 +278,11 @@ List<({String id, String name})> orderedCandidates(ZKind kind) {
 /// CAPPED at [kAutoResolveCap]. A sweep stops at the first hit, so this costs
 /// nothing when a source has the title; it bounds the MISS, which is the case
 /// that used to walk every installed source one at a time.
-List<({String id, String name})> sweepList(ZKind kind) =>
-    sweepCandidates(kind).take(sl<SourceOrderPrefs>().cap(kind)).toList();
+List<({String id, String name})> sweepList(ZKind kind) {
+  final all = sweepCandidates(kind);
+  final cap = sl<SourceOrderPrefs>().cap(kind);
+  return cap == SourceOrderPrefs.allSourcesCap ? all : all.take(cap).toList();
+}
 
 /// [sweepList] without the cap: every source the sweep is willing to walk, in
 /// the order it would walk them.

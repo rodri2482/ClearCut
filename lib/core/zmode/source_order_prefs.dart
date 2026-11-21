@@ -80,6 +80,12 @@ class SourceOrderPrefs {
   /// the whole budget and titles start failing that a fourth would have found.
   static const int minCap = 3;
 
+  /// Sentinel for "scan every installed source". Stored as-is (it must survive
+  /// the clamp on read/write), and interpreted by the two callers that apply
+  /// the cap — never passed to `take()` directly, where a negative would mean
+  /// an empty list.
+  static const int allSourcesCap = -1;
+
   /// How many sources the sweep may walk. Defaults to [kAutoResolveDefaultCap].
   ///
   /// Stored as a one-element list because this box is a `Box<List>` — the same
@@ -90,11 +96,13 @@ class SourceOrderPrefs {
     final raw = _box.get(_capKey(kind));
     final first = (raw == null || raw.isEmpty) ? null : raw.first;
     final n = first is int ? first : int.tryParse('$first');
+    if (n == allSourcesCap) return allSourcesCap;
     return (n ?? kAutoResolveDefaultCap).clamp(minCap, kAutoResolveCap);
   }
 
-  Future<void> setCap(ZKind kind, int n) =>
-      _box.put(_capKey(kind), [n.clamp(minCap, kAutoResolveCap)]);
+  Future<void> setCap(ZKind kind, int n) => _box.put(_capKey(kind), [
+    n == allSourcesCap ? allSourcesCap : n.clamp(minCap, kAutoResolveCap),
+  ]);
 
   static String _offKey(ZKind kind) => '${bucketOf(kind)}:off';
 
@@ -128,7 +136,10 @@ List<({String id, String name})> applySourceOrder(
   // / TV rows keyed on id and assert. First occurrence wins.
   if (order.isEmpty) {
     final seen = <String>{};
-    return [for (final c in candidates) if (seen.add(c.id)) c];
+    return [
+      for (final c in candidates)
+        if (seen.add(c.id)) c,
+    ];
   }
   final byId = {for (final c in candidates) c.id: c};
   final ordered = <({String id, String name})>[];
@@ -207,7 +218,8 @@ List<({String id, String name})> rankByRecord(
 }) {
   // Decorate-sort-undecorate on the incoming index, so ties keep pool order.
   final indexed = [
-    for (var i = 0; i < pool.length; i++) (at: i, s: pool[i], r: recordOf(pool[i].id)),
+    for (var i = 0; i < pool.length; i++)
+      (at: i, s: pool[i], r: recordOf(pool[i].id)),
   ];
   indexed.sort((a, b) {
     // Dead sinks below everything, however good its history was. A source

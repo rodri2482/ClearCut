@@ -1961,7 +1961,12 @@ class PlaybackResolver {
     // links the episode does not play, even though a source further down
     // would have. The failure sheet says only the top sources were checked,
     // and the slider is the fix. A hidden floor here would put the lie back.
-    return sorted.take(_sweepCap(c.kind)).toList();
+    final cap = _sweepCap(c.kind);
+    // `all` is a sentinel, not a count: `take(-1)` would hand back an empty
+    // list and make "scan everything" the one setting that plays nothing.
+    return cap == SourceOrderPrefs.allSourcesCap
+        ? sorted
+        : sorted.take(cap).toList();
   }
 
   /// How many sources a sweep may walk, from the user's Source Priority

@@ -35,6 +35,7 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.RenderersFactory
@@ -82,6 +83,7 @@ class PhonePlayerActivity : Activity() {
 
     private lateinit var loadingOverlay: View
     private lateinit var loadingBackdrop: android.widget.ImageView
+    private var loadingArtwork: PhoneWatchImages? = null
     private lateinit var loadingTitle: android.widget.TextView
     private lateinit var loadingEpisode: android.widget.TextView
     private lateinit var loadingStatus: android.widget.TextView
@@ -218,6 +220,7 @@ class PhonePlayerActivity : Activity() {
     private var subtitlePreferenceApplied = false
     private var pendingAddonSubtitleId: String? = null
     private var currentSourceFactory: DefaultMediaSourceFactory? = null
+    private val onlineSubtitleUris = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private var playbackDiskCache: androidx.media3.datasource.cache.Cache? = null
     private var playbackStarted = false
     private var resizeIndex = 0
@@ -422,14 +425,16 @@ class PhonePlayerActivity : Activity() {
         playerView.useController = false
         active = this
 
+        val heap = Runtime.getRuntime()
         val exo = ExoPlayer.Builder(this, renderersFactory())
             .setLoadControl(
-                BufferPresets.loadControl(
+                BufferPresets.phoneLoadControl(
                     intent.getIntExtra(PhonePlayerIntent.EXTRA_BUF_MIN_MS, 0),
                     intent.getIntExtra(PhonePlayerIntent.EXTRA_BUF_MAX_MS, 0),
                     intent.getIntExtra(PhonePlayerIntent.EXTRA_BUF_BYTES, 0),
                     intent.getIntExtra(PhonePlayerIntent.EXTRA_BUF_BACK_MS, 0),
-                    maxHeapBytes = Runtime.getRuntime().maxMemory(),
+                    maxHeapBytes = heap.maxMemory(),
+                    usedHeapBytes = heap.totalMemory() - heap.freeMemory(),
                 ),
             )
             .build()
@@ -469,7 +474,7 @@ class PhonePlayerActivity : Activity() {
                 sendDiscordPresence()
                 PhonePlayerBridge.channel?.invokeMethod(
                     "playbackStarted",
-                    mapOf("index" to currentIndex),
+                    mapOf("index" to currentIndex, "sessionId" to sessionId),
                 )
                 hideLoading()
             }
@@ -582,20 +587,15 @@ class PhonePlayerActivity : Activity() {
         val headers = PhonePlayerIntent.headersFromArray(
             intent.getStringArrayExtra(PhonePlayerIntent.EXTRA_COVER_HEADERS),
         )
-        Thread {
-            val bitmap = runCatching {
-                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 6_000
-                conn.readTimeout = 6_000
-                for ((k, v) in headers) conn.setRequestProperty(k, v)
-                conn.inputStream.use { android.graphics.BitmapFactory.decodeStream(it) }
-            }.getOrNull()
-            if (bitmap != null) {
-                runOnUiThread {
-                    if (!isFinishing && !isDestroyed) loadingBackdrop.setImageBitmap(bitmap)
-                }
-            }
-        }.start()
+        loadingArtwork = PhoneWatchImages(this, headers).also { it.load(loadingBackdrop, url) }
+    }
+
+    private fun releaseLoadingArtwork() {
+        loadingArtwork?.let { artwork ->
+            artwork.clear(loadingBackdrop)
+            artwork.close()
+        }
+        loadingArtwork = null
     }
 
     private fun setLoadingStatus(text: String) {
@@ -631,6 +631,7 @@ class PhonePlayerActivity : Activity() {
         handler.removeCallbacks(resolveTimeout)
         handler.removeCallbacks(startTimeout)
         loadingOverlay.visibility = View.GONE
+        releaseLoadingArtwork()
         setBuffering(false)
         everPlayed = true
     }
@@ -1538,14 +1539,17 @@ class PhonePlayerActivity : Activity() {
         attemptedUrls.add(url)
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-        if (headers.isNotEmpty()) httpFactory.setDefaultRequestProperties(headers)
         val builder = MediaItem.Builder().setUri(url)
         if (!mime.isNullOrEmpty()) builder.setMimeType(mime)
         if (subs.isNotEmpty()) builder.setSubtitleConfigurations(subs)
         // DefaultDataSource picks the reader off the scheme, so a downloaded
         // file:// or content:// plays through the local readers while streams
         // keep the headers and redirect handling above.
-        val upstream = DefaultDataSource.Factory(this, httpFactory)
+        val upstream = ResolvingDataSource.Factory(DefaultDataSource.Factory(this, httpFactory)) { spec ->
+            // An online subtitle is fetched independently of the media host.
+            if (onlineSubtitleUris.contains(spec.uri.toString())) spec
+            else spec.withAdditionalHeaders(headers)
+        }
         var dataSource: androidx.media3.datasource.DataSource.Factory = upstream
         if (PhonePlaybackCache.supports(url, mime)) {
             if (playbackDiskCache == null && intent.getBooleanExtra(PhonePlayerIntent.EXTRA_DISK_CACHE, false)) {
@@ -1623,7 +1627,7 @@ class PhonePlayerActivity : Activity() {
         handler.postDelayed(resolveTimeout, 30_000L)
         ch.invokeMethod(
             "resolveEpisode",
-            mapOf("index" to index),
+            mapOf("index" to index, "sessionId" to sessionId),
             object : io.flutter.plugin.common.MethodChannel.Result {
                 override fun success(result: Any?) {
                     @Suppress("UNCHECKED_CAST")
@@ -1667,6 +1671,7 @@ class PhonePlayerActivity : Activity() {
         loadingEpisode.text = episodeText.text
         setLoadingStatus(getString(R.string.phone_player_status_starting))
         updateEpisodeNavigation()
+        onlineSubtitleUris.addAll((m["onlineSubtitleUrls"] as? List<*>)?.filterIsInstance<String>().orEmpty())
         loadStream(
             url = url,
             headers = headersFrom(m["headers"]),
@@ -1684,8 +1689,11 @@ class PhonePlayerActivity : Activity() {
         bumpControls()
     }
 
-    private fun showSourceMenu() {
+    private fun showSourceMenu(preferEnglish: Boolean = false) {
         val ch = PhonePlayerBridge.channel ?: return
+        val generation = mediaGeneration
+        val requestedIndex = currentIndex
+        fun stillCurrent() = uiAlive() && generation == mediaGeneration && requestedIndex == currentIndex
         handler.removeCallbacks(hideRunnable)
         // A tap mid-load otherwise showed nothing until the stream itself
         // started — this request queues behind that same in-flight resolve
@@ -1700,34 +1708,47 @@ class PhonePlayerActivity : Activity() {
         PhoneWatchMotion.enter(waiting)
         ch.invokeMethod(
             "sourcesFor",
-            mapOf("index" to currentIndex),
+            mapOf("index" to requestedIndex, "sessionId" to sessionId, "preferEnglish" to preferEnglish),
             object : io.flutter.plugin.common.MethodChannel.Result {
                 override fun success(result: Any?) {
                     waiting.dismiss()
-                    if (canceled || !uiAlive()) return
+                    if (canceled || !stillCurrent()) return
                     mirrors = mapList(result)
+                    if (preferEnglish) {
+                        mirrors = mirrors.sortedBy { source ->
+                            val language = (source["audioLang"] as? String).orEmpty().lowercase()
+                            when {
+                                language in setOf("en", "eng", "english") || language.startsWith("en-") -> 0
+                                source["kind"] == "dub" -> 1
+                                else -> 2
+                            }
+                        }
+                    }
                     if (mirrors.isEmpty()) {
                         toast("Couldn't load sources")
                         bumpControls()
                         return
                     }
-                    val labels = mirrors.mapIndexed { i, source ->
+                    val shownMirrors = mirrors
+                    val labels = shownMirrors.mapIndexed { i, source ->
                         val label = (source["label"] as? String).orEmpty()
                             .ifBlank { "Server ${i + 1}" }
                         val quality = (source["quality"] as? String).orEmpty()
                         if (quality.isEmpty() || label.contains(quality)) label
                         else "$label · $quality"
                     }.toTypedArray()
-                    val selected = mirrors.indexOfFirst { it["url"] == currentUrl }
+                    val selected = shownMirrors.indexOfFirst { it["url"] == currentUrl }
                     PhonePlayerSheet(this@PhonePlayerActivity)
                         .setTitle(getString(R.string.phone_player_title_sources))
                         .setSingleChoiceItems(labels, selected) { dialog, which ->
                             dialog.dismiss()
-                            if (which != selected) playMirror(mirrors[which])
+                            if (which != selected && stillCurrent()) {
+                                shownMirrors.getOrNull(which)?.let { playMirror(it) }
+                            }
                         }
                         .setOnDismissListener { bumpControls() }
                         .showForPlayer().listView.setOnItemLongClickListener { _, _, which, _ ->
-                            val url = mirrors.getOrNull(which)?.get("url") as? String
+                            val url = shownMirrors.getOrNull(which)?.get("url") as? String
                             if (!url.isNullOrEmpty()) {
                                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                 clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Video link", url))
@@ -1739,14 +1760,14 @@ class PhonePlayerActivity : Activity() {
 
                 override fun error(code: String, msg: String?, details: Any?) {
                     waiting.dismiss()
-                    if (canceled || !uiAlive()) return
+                    if (canceled || !stillCurrent()) return
                     toast("Couldn't load sources")
                     bumpControls()
                 }
 
                 override fun notImplemented() {
                     waiting.dismiss()
-                    if (canceled || !uiAlive()) return
+                    if (canceled || !stillCurrent()) return
                     toast("Couldn't load sources")
                     bumpControls()
                 }
@@ -1805,7 +1826,7 @@ class PhonePlayerActivity : Activity() {
         val position = player?.currentPosition ?: 0L
         ch.invokeMethod(
             "sourcesFor",
-            mapOf("index" to currentIndex),
+            mapOf("index" to requestedIndex, "sessionId" to sessionId),
             object : io.flutter.plugin.common.MethodChannel.Result {
                 override fun success(result: Any?) {
                     if (!uiAlive()) return
@@ -1864,7 +1885,7 @@ class PhonePlayerActivity : Activity() {
         toast("Trying another source…")
         ch.invokeMethod(
             "nextSource",
-            mapOf("index" to currentIndex),
+            mapOf("index" to requestedIndex, "sessionId" to sessionId),
             object : io.flutter.plugin.common.MethodChannel.Result {
                 override fun success(result: Any?) {
                     if (!uiAlive()) return
@@ -2108,11 +2129,6 @@ class PhonePlayerActivity : Activity() {
         // audioPicks[0] ("Auto") sits at this label index; tracks follow.
         val audioBase = labels.size - 1
         val addonSubtitles = intent.getBooleanExtra(PhonePlayerIntent.EXTRA_STREMIO_SUBTITLES, false)
-        if (!addonSubtitles && audioTracks.size + textTracks.size < 2 && versionFor.size <= 1) {
-            toast(getString(R.string.phone_player_toast_no_tracks))
-            bumpControls()
-            return
-        }
         val audioPicks = mutableListOf<TrackSelectionOverride?>(null)
         for ((g, i) in audioTracks) {
             val f = g.getTrackFormat(i)
@@ -2120,6 +2136,9 @@ class PhonePlayerActivity : Activity() {
             versionFor += null
             audioPicks += TrackSelectionOverride(g.mediaTrackGroup, i)
         }
+        val englishAudioRow = labels.size
+        labels += "English audio / dub sources…"
+        versionFor += null
         val textBase = labels.size
         labels += "Subtitles: Off"
         versionFor += null
@@ -2135,6 +2154,9 @@ class PhonePlayerActivity : Activity() {
             labels += "Addon subtitles…"
             versionFor += null
         }
+        val englishSubtitleRow = labels.size
+        labels += "Find English subtitles…"
+        versionFor += null
         val selectedRows = mutableSetOf<Int>()
         if (categories.size > 1) categories.indexOf(currentCategory).takeIf { it >= 0 }?.let { selectedRows += it }
         val audioIndex = audioTracks.indexOfFirst { (group, index) ->
@@ -2151,6 +2173,14 @@ class PhonePlayerActivity : Activity() {
                     showAddonSubtitles()
                     return@setTrackItems
                 }
+                if (which == englishAudioRow) {
+                    showSourceMenu(preferEnglish = true)
+                    return@setTrackItems
+                }
+                if (which == englishSubtitleRow) {
+                    showAddonSubtitles(onlineEnglish = true)
+                    return@setTrackItems
+                }
                 val version = versionFor[which]
                 if (version != null) {
                     if (version != currentCategory) switchCategory(version)
@@ -2165,15 +2195,15 @@ class PhonePlayerActivity : Activity() {
             .showForPlayer()
     }
 
-    private fun showAddonSubtitles() {
+    private fun showAddonSubtitles(onlineEnglish: Boolean = false) {
         val ch = PhonePlayerBridge.channel ?: return
         val generation = mediaGeneration
         val url = currentUrl
         val loading = PhonePlayerSheet(this)
-            .setMessage("Loading addon subtitles…")
+            .setMessage(if (onlineEnglish) "Finding English subtitles…" else "Loading addon subtitles…")
             .setNegativeButton(android.R.string.cancel, null)
             .showForPlayer()
-        ch.invokeMethod("addonSubtitles", mapOf(
+        ch.invokeMethod(if (onlineEnglish) "englishSubtitles" else "addonSubtitles", mapOf(
             "sessionId" to sessionId, "index" to currentIndex, "url" to url,
         ), object : io.flutter.plugin.common.MethodChannel.Result {
             override fun success(result: Any?) {
@@ -2184,7 +2214,7 @@ class PhonePlayerActivity : Activity() {
                 fun strings(key: String) = (data?.get(key) as? List<*>)?.filterIsInstance<String>() ?: emptyList()
                 val tracks = subtitlesFrom(strings("subUrls"), strings("subLangs"), strings("subLabels"), strings("subFormats"), emptyList())
                 if (tracks.isEmpty()) {
-                    toast("No addon subtitles found. Try again.")
+                    toast(if (onlineEnglish) "No English subtitles found for this episode." else "No addon subtitles found. Try again.")
                     return
                 }
                 PhonePlayerSheet(this@PhonePlayerActivity)
@@ -2197,6 +2227,7 @@ class PhonePlayerActivity : Activity() {
                         val selected = tracks[which].buildUpon()
                             .setId(tracks[which].uri.toString())
                             .setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()
+                        if (onlineEnglish) onlineSubtitleUris.add(selected.uri.toString())
                         val remaining = item.localConfiguration?.subtitleConfigurations.orEmpty()
                             .filter { it.uri != selected.uri }
                             .map { it.buildUpon().setSelectionFlags(0).build() }
@@ -2226,7 +2257,9 @@ class PhonePlayerActivity : Activity() {
             }
             override fun error(code: String, message: String?, details: Any?) {
                 loading.dismiss()
-                if (uiAlive() && generation == mediaGeneration) toast("Could not load addon subtitles. Try again.")
+                if (uiAlive() && generation == mediaGeneration) {
+                    toast(if (onlineEnglish) "Could not look up English subtitles." else "Could not load addon subtitles. Try again.")
+                }
             }
             override fun notImplemented() { loading.dismiss() }
         })
@@ -2246,6 +2279,7 @@ class PhonePlayerActivity : Activity() {
             mapOf(
                 "category" to category,
                 "index" to currentIndex,
+                "sessionId" to sessionId,
                 "positionMs" to position,
             ),
             object : io.flutter.plugin.common.MethodChannel.Result {
@@ -3182,6 +3216,7 @@ class PhonePlayerActivity : Activity() {
     }
 
     override fun onDestroy() {
+        releaseLoadingArtwork()
         pip.unregister()
         watchDownloadSheet?.dismiss()
         watchDownloadSheet = null

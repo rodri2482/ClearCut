@@ -486,7 +486,10 @@ class WatchHistory {
   /// whether the push was complete.
   Future<({int pushed, int failed})> pushAllLocalToCloud() async {
     final uid = _currentUserId();
-    if (uid == null) return (pushed: 0, failed: 0);
+    // A missing account is a FAILED sync, not an empty successful one: this
+    // result is also used to decide whether to clear the "pending" flag, and
+    // callers must never report "Already synced" after uploading nothing.
+    if (uid == null) return (pushed: 0, failed: 1);
     final profileId = _profileId;
     // What the cloud already has, and how fresh — so we don't clobber newer.
     final cloudTimes = <String, int>{};

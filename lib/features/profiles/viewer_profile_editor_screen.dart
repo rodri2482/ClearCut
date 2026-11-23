@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:dio/dio.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -52,7 +51,7 @@ Future<void> openViewerProfileEditor(
       final token =
           sl<SupabaseService>().client.auth.currentSession?.accessToken;
       if (token != null) {
-        final uploader = ProfileAvatarUploader(sl<Dio>());
+        final uploader = sl<ProfileAvatarUploader>();
         for (final url in {
           result.photoUrl,
           result.coverUrl,
@@ -117,14 +116,16 @@ Future<void> openViewerProfileEditor(
         profile.photoUrl != result.photoUrl &&
         !profiles.profiles.any(
           (other) =>
-              other.id != profile.id && other.photoUrl == profile.photoUrl,
+              other.photoUrl == profile.photoUrl ||
+              other.coverUrl == profile.photoUrl,
         )) {
       final token =
           sl<SupabaseService>().client.auth.currentSession?.accessToken;
       if (token != null) {
-        await ProfileAvatarUploader(
-          sl<Dio>(),
-        ).delete(url: profile.photoUrl!, token: token);
+        await sl<ProfileAvatarUploader>().delete(
+          url: profile.photoUrl!,
+          token: token,
+        );
       }
     }
     if (synced &&
@@ -132,16 +133,16 @@ Future<void> openViewerProfileEditor(
         profile.coverUrl != result.coverUrl &&
         !profiles.profiles.any(
           (other) =>
-              other.id != profile.id &&
-              (other.coverUrl == profile.coverUrl ||
-                  other.photoUrl == profile.coverUrl),
+              other.coverUrl == profile.coverUrl ||
+              other.photoUrl == profile.coverUrl,
         )) {
       final token =
           sl<SupabaseService>().client.auth.currentSession?.accessToken;
       if (token != null) {
-        await ProfileAvatarUploader(
-          sl<Dio>(),
-        ).delete(url: profile.coverUrl!, token: token);
+        await sl<ProfileAvatarUploader>().delete(
+          url: profile.coverUrl!,
+          token: token,
+        );
       }
     }
   }
@@ -249,9 +250,7 @@ class _ViewerProfileEditorScreenState extends State<ViewerProfileEditorScreen> {
     if (token != null) {
       for (final url in _uploadedUrls) {
         if (_saved && (url == _photoUrl || url == _coverUrl)) continue;
-        unawaited(
-          ProfileAvatarUploader(sl<Dio>()).delete(url: url, token: token),
-        );
+        unawaited(sl<ProfileAvatarUploader>().delete(url: url, token: token));
       }
     }
     _name.dispose();
@@ -343,14 +342,20 @@ class _ViewerProfileEditorScreenState extends State<ViewerProfileEditorScreen> {
   }
 
   Future<void> _pickStillPhoto() async {
-    final x = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      maxWidth: ProfileAvatarUploader.maxAvatarDimension.toDouble(),
-      maxHeight: ProfileAvatarUploader.maxAvatarDimension.toDouble(),
-      imageQuality: 100,
-    );
-    if (x == null || !mounted) return;
-    final bytes = await x.readAsBytes();
+    final Uint8List bytes;
+    try {
+      final file = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: ProfileAvatarUploader.maxAvatarDimension.toDouble(),
+        maxHeight: ProfileAvatarUploader.maxAvatarDimension.toDouble(),
+        imageQuality: 100,
+      );
+      if (file == null || !mounted) return;
+      bytes = await file.readAsBytes();
+    } catch (_) {
+      if (mounted) setState(() => _photoError = 'Could not read that photo.');
+      return;
+    }
     if (!mounted) return;
     await _uploadAvatarBytes(bytes);
   }
@@ -401,17 +406,16 @@ class _ViewerProfileEditorScreenState extends State<ViewerProfileEditorScreen> {
     });
     String? url;
     try {
-      url = await ProfileAvatarUploader(
-        sl<Dio>(),
-      ).upload(bytes: bytes, token: token);
+      url = await sl<ProfileAvatarUploader>().upload(
+        bytes: bytes,
+        token: token,
+      );
     } catch (_) {
       url = null;
     }
     if (!mounted) {
       if (url != null) {
-        unawaited(
-          ProfileAvatarUploader(sl<Dio>()).delete(url: url, token: token),
-        );
+        unawaited(sl<ProfileAvatarUploader>().delete(url: url, token: token));
       }
       return;
     }
@@ -429,14 +433,20 @@ class _ViewerProfileEditorScreenState extends State<ViewerProfileEditorScreen> {
 
   Future<void> _pickCover() async {
     if (!requireLogin(context, action: 'upload a profile cover')) return;
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1600,
-      maxHeight: 900,
-      imageQuality: 100,
-    );
-    if (picked == null || !mounted) return;
-    final bytes = await picked.readAsBytes();
+    final Uint8List bytes;
+    try {
+      final file = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1600,
+        maxHeight: 900,
+        imageQuality: 100,
+      );
+      if (file == null || !mounted) return;
+      bytes = await file.readAsBytes();
+    } catch (_) {
+      if (mounted) setState(() => _coverError = 'Could not read that cover.');
+      return;
+    }
     if (!mounted) return;
     if (!requireLogin(context, action: 'upload a profile cover')) return;
     final token = sl<SupabaseService>().client.auth.currentSession?.accessToken;
@@ -448,14 +458,13 @@ class _ViewerProfileEditorScreenState extends State<ViewerProfileEditorScreen> {
       _uploading = true;
       _coverError = null;
     });
-    final url = await ProfileAvatarUploader(
-      sl<Dio>(),
-    ).uploadCover(bytes: bytes, token: token);
+    final url = await sl<ProfileAvatarUploader>().uploadCover(
+      bytes: bytes,
+      token: token,
+    );
     if (!mounted) {
       if (url != null) {
-        unawaited(
-          ProfileAvatarUploader(sl<Dio>()).delete(url: url, token: token),
-        );
+        unawaited(sl<ProfileAvatarUploader>().delete(url: url, token: token));
       }
       return;
     }

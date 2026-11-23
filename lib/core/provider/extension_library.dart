@@ -13,6 +13,7 @@ import '../mihon/mihon_extension_service.dart';
 import '../mihon/mihon_manager.dart';
 import '../mihon/mihon_repo.dart';
 import '../provider/provider_manager.dart' show AniyomiManager;
+import 'bundled_sources.dart';
 import 'cloudstream_provider.dart';
 import 'provider_registry.dart';
 import 'provider_repo_registry.dart';
@@ -168,6 +169,20 @@ class ExtensionLibrary {
     final repos = sl<ProviderReposRegistry>();
     final registry = sl<ProviderRegistry>();
     return [
+      for (final source in bundledSources.where((source) => source.optional))
+        LibraryEntry(
+          format: LibraryFormat.clearcut,
+          kind: LibraryKind.moviesSeries,
+          id: source.id,
+          name: source.name,
+          lang: 'en',
+          repoUrl: kBundledRepoUrl,
+          installed: source.isInstalled(registry),
+          install: () async {
+            await source.install(registry);
+            return true;
+          },
+        ),
       for (final repo in repos.getAll())
         for (final s in repo.sources)
           LibraryEntry(

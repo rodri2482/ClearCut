@@ -131,12 +131,36 @@ void main() {
     expect(failure, isNull);
   });
 
-  test('off still yields a torrent to mpv (native can never play it)', () async {
-    const torrent = VideoSource(url: 'magnet:?xt=urn:btih:abc');
-    await start(enabled: false, resolve: (_) async => [torrent]);
-    await send('resolveEpisode', {'index': 0});
-    expect(await request(url: torrent.url), isTrue);
-  });
+  test(
+    'an old player session cannot open an episode or replace its mirrors',
+    () async {
+      var resolutions = 0;
+      await start(
+        resolve: (_) async {
+          resolutions++;
+          return [source, second];
+        },
+      );
+      final stale = {'index': 0, 'sessionId': -1};
+      expect(await send('resolveEpisode', stale), isNull);
+      expect(await send('sourcesFor', stale), isEmpty);
+      expect(await send('nextSource', stale), isEmpty);
+      expect(resolutions, 0);
+      final current = {'index': 0, 'sessionId': launch['sessionId']};
+      expect((await send('resolveEpisode', current) as Map)['url'], source.url);
+      expect(resolutions, 1);
+    },
+  );
+
+  test(
+    'off still yields a torrent to mpv (native can never play it)',
+    () async {
+      const torrent = VideoSource(url: 'magnet:?xt=urn:btih:abc');
+      await start(enabled: false, resolve: (_) async => [torrent]);
+      await send('resolveEpisode', {'index': 0});
+      expect(await request(url: torrent.url), isTrue);
+    },
+  );
 
   test(
     'off still honours a manual switch for a normal (non-torrent) source',
@@ -147,15 +171,12 @@ void main() {
     },
   );
 
-  test(
-    'a second manual switch for the same episode still works',
-    () async {
-      await start();
-      await send('resolveEpisode', {'index': 0});
-      expect(await request(manual: true), isTrue);
-      expect(await request(manual: true), isTrue);
-    },
-  );
+  test('a second manual switch for the same episode still works', () async {
+    await start();
+    await send('resolveEpisode', {'index': 0});
+    expect(await request(manual: true), isTrue);
+    expect(await request(manual: true), isTrue);
+  });
 
   test(
     'confirmed handoff retains episode, headers, subtitles and position',

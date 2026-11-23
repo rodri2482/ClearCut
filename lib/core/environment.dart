@@ -1,50 +1,121 @@
 /// Public compile-time application settings.
 class Environment {
-  // ClearCut: cloud accounts/sync are OFF. The ClearCut servers are not used.
-  // Pass your own backend with --dart-define=SUPABASE_URL=... to re-enable.
+  // Supabase is the backend for accounts, cloud sync and media. Compile a
+  // project in with
+  //   --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...
+  // Without one the app still runs fully offline, just without an account.
   static const String supabaseUrl = String.fromEnvironment(
     'SUPABASE_URL',
     defaultValue: 'https://offline.invalid',
   );
   static const String supabaseAnonKey = String.fromEnvironment(
     'SUPABASE_ANON_KEY',
-    defaultValue:
-        'disabled',
+    defaultValue: 'disabled',
   );
 
-  // Keep saved sessions when the auth host changes.
-  static const String supabaseSessionStorageKey =
-      'sb-eogwzrlfoercfwcfwlmv-auth-token';
+  // Saved sessions live under the key Supabase itself would use for the
+  // compiled project (`sb-<ref>-auth-token`). It used to be pinned to another
+  // project's ref, so a stale token from that project could be restored and
+  // then rejected by this one — sign-in looked broken with no error.
+  static String get supabaseSessionStorageKey {
+    final host = Uri.tryParse(supabaseUrl)?.host ?? '';
+    const suffix = '.supabase.co';
+    if (host.endsWith(suffix)) {
+      final ref = host.substring(0, host.length - suffix.length);
+      if (ref.isNotEmpty && ref != 'offline.invalid') {
+        return 'sb-$ref-auth-token';
+      }
+    }
+    // Offline build: keep the historical key so a later configured build can
+    // still see a session saved before the project URL was supplied.
+    return 'sb-eogwzrlfoercfwcfwlmv-auth-token';
+  }
 
-  // Supabase issues auth tokens; all app cloud-data sync uses the VPS.
+  // Supabase is the backend of record: accounts, app data and media. The
+  // VPS_SYNC_URL define remains as an override for a standalone PostgREST
+  // deployment, but when it is absent the Supabase project is used instead of
+  // silently pointing every store at offline.invalid.
   static const String vpsSyncUrl = String.fromEnvironment(
     'VPS_SYNC_URL',
     defaultValue: 'https://offline.invalid',
   );
 
+  /// Base URL of the PostgREST endpoint that holds app cloud data.
+  static String get cloudSyncUrl {
+    final vps = Uri.tryParse(vpsSyncUrl);
+    if (vps != null && vps.host.isNotEmpty && vps.host != 'offline.invalid') {
+      return vpsSyncUrl;
+    }
+    return supabaseUrl;
+  }
+
+  /// True when a real cloud backend (Supabase or an explicit VPS override) was
+  /// compiled into this build.
+  static bool get cloudSyncConfigured {
+    final uri = Uri.tryParse(cloudSyncUrl);
+    return uri != null &&
+        uri.scheme == 'https' &&
+        uri.host.isNotEmpty &&
+        uri.host != 'offline.invalid';
+  }
+
+  static bool get usingSupabaseForData {
+    final uri = Uri.tryParse(cloudSyncUrl);
+    return uri != null && uri.host.endsWith('.supabase.co');
+  }
+
+  /// PostgREST root for [cloudSyncUrl]. Supabase serves it under `/rest/v1`;
+  /// a standalone VPS override is already a PostgREST root.
+  static String get cloudRestUrl {
+    final uri = Uri.tryParse(cloudSyncUrl);
+    if (uri == null || !usingSupabaseForData) return cloudSyncUrl;
+    return uri
+        .replace(
+          pathSegments: [
+            ...uri.pathSegments.where((segment) => segment.isNotEmpty),
+            'rest',
+            'v1',
+          ],
+        )
+        .toString();
+  }
+
+  /// Kept for callers that only need to know whether the legacy VPS override
+  /// is set. Prefer [cloudSyncConfigured].
+  static bool get vpsSyncConfigured =>
+      Uri.tryParse(vpsSyncUrl)?.host != 'offline.invalid';
+
   /// Password-reset landing page.
   /// Password-reset landing. Supabase now drives reset (via the auth `site_url`,
   /// which points at this same page); kept for reference. Not used by the
   /// Supabase AuthCubit, which calls `resetPasswordForEmail`.
-  static const String passwordResetUrl = 'https://zangetsu.online/';
+  static String get passwordResetUrl =>
+      siteBaseUri?.toString() ?? 'https://clearcut.app/';
 
-  /// Base of the ClearCut website (landing + reset + the share "open" page).
-  static const String siteBaseUrl = 'https://zangetsu.online';
+  static const _siteUrl = String.fromEnvironment('CLEARCUT_SITE_URL');
+  static Uri? get siteBaseUri {
+    final uri = Uri.tryParse(_siteUrl);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      return null;
+    }
+    return uri.replace(path: '${uri.path.replaceFirst(RegExp(r'/+$'), '')}/');
+  }
 
-  /// Share links point here. The page opens the app if installed (via the
-  /// [openLinkScheme] scheme below), otherwise offers the download. Its domain
-  /// uses the same domain as the password-reset page.
-  static const String siteOpenUrl = '$siteBaseUrl/open/';
-
-  /// TV pairing page on the website. Used when someone opens a shared/https
-  /// pair link in a browser; the page can hand off to the app via
-  /// `zangetsu://pair`. App-facing TV QRs encode the deeplink directly.
-  static const String sitePairUrl = '$siteBaseUrl/pair/';
-
-  /// The "open" page redirects to `zangetsu://open?…`; an installed app catches
-  /// it (see [OpenLinkService] + the Android manifest intent-filter).
-  static const String openLinkScheme = trackerRedirectScheme; // 'zangetsu'
+  static Uri? get siteOpenUri => siteBaseUri?.resolve('open/');
+  static Uri? get sitePairUri => siteBaseUri?.resolve('pair/');
+  static const String openLinkScheme = 'clearcut';
   static const String openLinkHost = 'open';
+
+  /// `clearcut://open` — the app's own return address for auth and share
+  /// links. Using this instead of a hardcoded `zangetsu://open` matters when
+  /// both apps are installed: Android would otherwise hand the login back to
+  /// Zangetsu.
+  static String get openLinkUrl => '$openLinkScheme://$openLinkHost';
   static const String pairLinkHost = 'pair';
 
   // Provisioned backend ids (see docs / setup).

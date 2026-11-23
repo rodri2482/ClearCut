@@ -350,15 +350,26 @@ class ProviderRegistry {
     bool force = false,
   }) async {
     final resolvedRepo = repoUrl.isEmpty ? kBundledRepoUrl : repoUrl;
+    final key = providerKey(resolvedRepo, sourceId);
+    // Reinstalling or updating a source must not silently re-enable one the
+    // viewer switched off. The bundled path already does this; the repo path
+    // used to write a fresh entry with the default enabled=true.
+    final existing = _box.get(key);
+    final enabled = existing == null
+        ? true
+        : ProviderRegistryEntry.fromJson(
+          Map<String, dynamic>.from(existing),
+        ).enabled;
     final entry = ProviderRegistryEntry(
       name: sourceId,
       url: fileUrl,
       version: version,
+      enabled: enabled,
       originRepoUrl: resolvedRepo,
       displayName: displayName,
       logoUrl: logoUrl,
     );
-    await _box.put(providerKey(resolvedRepo, sourceId), entry.toJson());
+    await _box.put(key, entry.toJson());
     // Logged because installing was previously silent: a shared log showed the
     // source count jump from 0 to 58 with nothing to explain it, which reads
     // like a boot bug rather than someone restoring a backup. A restore comes
@@ -372,14 +383,16 @@ class ProviderRegistry {
     return entry;
   }
 
-  /// Migration: drop every legacy `bundled://` entry. The app no longer ships
-  /// built-in providers (all sources come from repos), so any bundled entries
-  /// left over from older installs would fail to load (their JS isn't seeded).
-  /// Safe to call every launch — a no-op once nothing bundled remains.
-  Future<void> purgeBundled() async {
+  /// Removes bundled entries whose scripts are no longer shipped.
+  Future<void> purgeBundled({Set<String> keep = const {}}) async {
     final keys = _box.keys
         .map((k) => k.toString())
-        .where((k) => repoUrlOf(k) == kBundledRepoUrl || !k.contains(kProviderKeySep))
+        .where(
+          (k) =>
+              !k.contains(kProviderKeySep) ||
+              (repoUrlOf(k) == kBundledRepoUrl &&
+                  !keep.contains(sourceIdOf(k))),
+        )
         .toList();
     for (final k in keys) {
       final sourceId = sourceIdOf(k);
@@ -427,7 +440,10 @@ class ProviderRegistry {
   /// Loads every enabled installed entry into the runtime. Best-effort:
   /// per-entry failures are logged, not thrown, so one broken provider
   /// doesn't sink the app.
-  Future<List<String>> loadAll({bool force = false, Duration? perEntryTimeout}) async {
+  Future<List<String>> loadAll({
+    bool force = false,
+    Duration? perEntryTimeout,
+  }) async {
     final allEntries = getAll();
     final enabledEntries = allEntries.where((e) => e.enabled).toList();
     debugPrint(

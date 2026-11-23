@@ -12,6 +12,7 @@ class SourceMatch {
     required this.showTitle,
     required this.pinned,
     this.at = 0,
+    this.identityChecked = false,
   });
 
   final String sourceId;
@@ -26,6 +27,7 @@ class SourceMatch {
   /// When this match was saved. Lets [MatchStore.bestFor] pick the source
   /// Auto Resolve just found rather than an arbitrary earlier guess.
   final int at;
+  final bool identityChecked;
 
   Map<String, dynamic> toMap() => {
     'sourceId': sourceId,
@@ -34,6 +36,7 @@ class SourceMatch {
     'showTitle': showTitle,
     'pinned': pinned,
     'at': at,
+    'identityChecked': identityChecked,
   };
 
   static SourceMatch? fromMap(dynamic m) {
@@ -47,6 +50,7 @@ class SourceMatch {
       showTitle: m['showTitle'] is String ? m['showTitle'] as String : '',
       pinned: m['pinned'] == true,
       at: m['at'] is int ? m['at'] as int : 0,
+      identityChecked: m['identityChecked'] == true,
     );
   }
 }

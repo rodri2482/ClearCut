@@ -27,11 +27,13 @@ import '../player/player_screen.dart' show openSubtitleStyleSheet;
 import '../player/shader_presets.dart';
 import '../player/tv_exo_spike_screen.dart';
 import '../../core/di/injector.dart';
+import '../../core/environment.dart';
 import '../../core/platform/apple_tv.dart';
 import '../../core/playback/external_player.dart';
 import '../../core/playback/my_list.dart';
 import '../../core/playback/playback_prefs.dart';
 import '../../core/playback/watch_history.dart';
+import '../../core/reading/read_history.dart';
 import '../auth/reconnect.dart';
 import '../home/home_catalogue_prefs.dart';
 import '../../core/privacy/incognito_mode.dart';
@@ -906,11 +908,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
       section: SettingsSection.account,
       icon: Icons.cloud_upload_outlined,
       title: l10n.syncLibraryToCloud,
-      subtitle: l10n.syncLibraryToCloudSubtitle,
+      subtitle: Environment.cloudSyncConfigured
+          ? l10n.syncLibraryToCloudSubtitle
+          : 'Cloud sync is unavailable in this build',
       keywords:
           'sync cloud upload library history continue watching list device '
           'cross-device re-sync fix restore',
       onTap: () async {
+        if (!Environment.cloudSyncConfigured) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Cloud sync is unavailable. Your library stays on this device.',
+              ),
+            ),
+          );
+          return;
+        }
         if (sl<AuthCubit>().state.user == null) {
           ScaffoldMessenger.of(
             context,
@@ -931,20 +945,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
         messenger
           ..clearSnackBars()
           ..showSnackBar(SnackBar(content: Text(l10n.syncingLibraryToCloud)));
-        final h = (await sl<WatchHistory>().pushAllLocalToCloud()).pushed;
-        final l = (await sl<MyListStore>().pushAllLocalToCloud()).pushed;
+        final history = await sl<WatchHistory>().pushAllLocalToCloud();
+        final list = await sl<MyListStore>().pushAllLocalToCloud();
+        // Manga/novel progress is library data too. Leaving it out meant a
+        // reading-only library reported "Already synced" after uploading
+        // nothing at all.
+        final reading = await sl<ReadHistory>().pushAllLocalToCloud();
         if (!mounted) return;
+        final uploaded = history.pushed + list.pushed + reading.pushed;
+        final failed = history.failed + list.failed + reading.failed;
+        final result = failed > 0
+            ? (uploaded == 0
+                  ? 'Sync failed for $failed items. Try again.'
+                  : 'Synced $uploaded items. $failed failed. Try again to finish.')
+            : uploaded == 0
+            ? l10n.syncLibraryAlreadySynced
+            : l10n.syncLibraryPushed(history.pushed, list.pushed) +
+                  (reading.pushed > 0
+                      ? ' + ${reading.pushed} reading'
+                      : '');
         messenger
           ..clearSnackBars()
-          ..showSnackBar(
-            SnackBar(
-              content: Text(
-                h == 0 && l == 0
-                    ? l10n.syncLibraryAlreadySynced
-                    : l10n.syncLibraryPushed(h, l),
-              ),
-            ),
-          );
+          ..showSnackBar(SnackBar(content: Text(result)));
       },
     ),
     _SettingsEntry(

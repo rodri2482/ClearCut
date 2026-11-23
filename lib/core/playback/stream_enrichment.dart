@@ -17,6 +17,13 @@ VideoSource _enrich(VideoSource s) {
   final text = [s.quality ?? '', s.label ?? '', s.audioLang ?? ''].join(' ');
 
   var audioLang = s.audioLang;
+  // `und` is what providers write when they do not know the language. Treating
+  // it as a real value hid English tracks labelled "English"/"eng" from the
+  // player's English filter — the label is the only truth we have in that case.
+  if (audioLang != null &&
+      const {'und', 'unknown', 'n/a'}.contains(audioLang.trim().toLowerCase())) {
+    audioLang = null;
+  }
   if (audioLang == null || audioLang.trim().isEmpty) {
     for (final lang in kSubtitleLanguages) {
       if (matchesSourceLang(text, lang)) {
@@ -44,6 +51,9 @@ VideoSource _enrich(VideoSource s) {
   final subtitles = <Subtitle>[];
   for (final sub in s.subtitles) {
     var lang = sub.lang;
+    if (const {'und', 'unknown', 'n/a'}.contains(lang.trim().toLowerCase())) {
+      lang = '';
+    }
     if (lang.trim().isEmpty) {
       for (final candidate in kSubtitleLanguages) {
         if (matchesSourceLang(sub.label ?? '', candidate)) {

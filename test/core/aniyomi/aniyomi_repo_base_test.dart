@@ -28,7 +28,9 @@ void main() {
         AniyomiRepo.normalizeBase(
           'https://github.com/keiyoushi/extensions/raw/repo/index.pb',
         ),
-        'https://github.com/keiyoushi/extensions/raw/repo',
+        // normalizeBase also rewrites GitHub page links to raw hosts, so the
+        // host changes as well as the filename being stripped.
+        'https://raw.githubusercontent.com/keiyoushi/extensions/repo',
       );
     });
 

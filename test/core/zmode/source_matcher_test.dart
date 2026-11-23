@@ -100,6 +100,67 @@ void main() {
   });
 
   group('matchOn cache safety', () {
+    test(
+      'a same-name movie cannot replace a series, even from an old cache',
+      () async {
+        const sourceId = 'cs:example';
+        const series = ZCanonical(ZKind.tv, 'tmdb:42');
+        final repo = _FakeSources({
+          sourceId: const [
+            MediaItem(
+              id: 'movie',
+              title: 'Same Name',
+              url: 'https://example.com/movie',
+              type: ProviderType.movie,
+              sourceId: sourceId,
+              isTvListing: false,
+            ),
+            MediaItem(
+              id: 'wrong',
+              title: 'Same Name',
+              url: 'https://example.com/wrong',
+              type: ProviderType.movie,
+              sourceId: sourceId,
+              tmdbIsTv: true,
+              tmdbId: 43,
+            ),
+            MediaItem(
+              id: 'right',
+              title: 'Same Name',
+              url: 'https://example.com/right',
+              type: ProviderType.movie,
+              sourceId: sourceId,
+              tmdbIsTv: true,
+              tmdbId: 42,
+            ),
+          ],
+        });
+        await store.save(
+          series,
+          const SourceMatch(
+            sourceId: sourceId,
+            showId: 'movie',
+            showUrl: 'https://example.com/movie',
+            showTitle: 'Same Name',
+            pinned: false,
+          ),
+        );
+        final matcher = SourceMatcher(
+          sources: repo,
+          store: store,
+          prefs: prefs,
+          candidates: (_) => [(id: sourceId, name: 'Example')],
+        );
+        final match = await matcher.matchOn(
+          series,
+          sourceId,
+          title: 'Same Name',
+        );
+        expect(match?.showUrl, 'https://example.com/right');
+        expect(repo.searched, [sourceId]);
+      },
+    );
+
     test('an NSFW source is never followed from a cached match', () async {
       final repo = _FakeSources({
         'cs:Noodle NSFW': [_hit('cs:Noodle NSFW', 'Ben 10')],

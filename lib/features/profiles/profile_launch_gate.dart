@@ -123,13 +123,24 @@ class _ProfileLaunchGateState extends State<ProfileLaunchGate> {
         bool locked = false;
         try {
           locked = await locks.isLocked(active.id);
-        } on ProfileLockException {
-          // Asking is off: launch never enforces the lock, so an unreadable
-          // status (offline with no cache yet, dead backend) must not trap
-          // the user on the error screen — go straight in. Asking on keeps
-          // the existing behavior: surface the failure instead of silently
-          // skipping the picker.
-          if (store.askOnLaunch) rethrow;
+        } on ProfileLockException catch (error) {
+          // A signed-in user must not be trapped on an error screen when the
+          // sync server is unreachable and this device has never cached a PIN
+          // status. The Store still reports the condition (so switching
+          // profiles can handle it), but at LAUNCH we let them in with a note.
+          // Other failures are real errors and still surface as before.
+          if (error.code != 'offline_pin_unavailable' && store.askOnLaunch) {
+            rethrow;
+          }
+          if (mounted && error.code == 'offline_pin_unavailable') {
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'PIN status is unavailable offline. Letting you in this once.',
+                ),
+              ),
+            );
+          }
         }
         if (!mounted || generation != _checkGeneration) return;
         if (locked && !locks.isUnlocked(active.id) && store.askOnLaunch) {

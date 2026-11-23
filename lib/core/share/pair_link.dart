@@ -1,8 +1,7 @@
 import '../environment.dart';
 import '../supabase/auth_route.dart';
 
-/// Encodes TV pairing links and parses incoming pair URLs from either the
-/// website (`https://zangetsu.online/pair/…`) or the `zangetsu://pair` deeplink.
+/// Encodes and parses TV pairing links.
 class PairLink {
   const PairLink({
     this.code,
@@ -19,14 +18,23 @@ class PairLink {
   /// When true this is the trackers-only QR (Flow B), not account sign-in.
   final bool trackers;
 
-  /// HTTPS pair URL for web/share links (browser → optional app handoff).
+  /// Uses ClearCut's web handoff when configured.
   static String qrData({
     required String code,
     String? nonce,
     bool trackers = false,
     String? authority,
   }) {
-    return Uri.parse(Environment.sitePairUrl)
+    final site = Environment.sitePairUri;
+    if (site == null) {
+      return deepLink(
+        code: code,
+        nonce: nonce,
+        trackers: trackers,
+        authority: authority,
+      );
+    }
+    return site
         .replace(
           queryParameters: _query(
             code: code,
@@ -47,7 +55,7 @@ class PairLink {
     String? authority,
   }) {
     return Uri(
-      scheme: Environment.trackerRedirectScheme,
+      scheme: Environment.openLinkScheme,
       host: Environment.pairLinkHost,
       queryParameters: _query(
         code: code,
@@ -75,16 +83,26 @@ class PairLink {
     required String nonce,
     required String tracker,
     String? authority,
-  }) => Uri.parse('${Environment.siteBaseUrl}/tv-connect/')
-      .replace(
-        queryParameters: {
-          ..._query(code: code, nonce: nonce, authority: authority),
-          'tracker': tracker,
-        },
-      )
-      .toString();
+  }) =>
+      (Environment.siteBaseUri?.resolve('tv-connect/') ??
+              Uri(
+                scheme: Environment.openLinkScheme,
+                host: Environment.pairLinkHost,
+              ))
+          .replace(
+            queryParameters: {
+              ..._query(
+                code: code,
+                nonce: nonce,
+                trackers: Environment.siteBaseUri == null,
+                authority: authority,
+              ),
+              'tracker': tracker,
+            },
+          )
+          .toString();
 
-  /// Accepts `zangetsu://pair?…` and the configured [Environment.sitePairUrl].
+  /// Accepts current and legacy pairing links.
   static PairLink? parse(Uri uri) {
     if (!_isPairUri(uri)) return null;
     if ((uri.queryParametersAll['auth']?.length ?? 0) > 1) return null;
@@ -100,17 +118,17 @@ class PairLink {
   }
 
   static bool _isPairUri(Uri uri) {
-    if (uri.scheme == Environment.trackerRedirectScheme &&
+    if ((uri.scheme == Environment.openLinkScheme ||
+            uri.scheme == Environment.trackerRedirectScheme) &&
         uri.host == Environment.pairLinkHost) {
       return true;
     }
-    final site = Uri.parse(Environment.sitePairUrl);
-    if ((uri.scheme == 'http' || uri.scheme == 'https') &&
-        uri.host == site.host) {
-      final path = uri.path.replaceAll(RegExp(r'/+$'), '');
-      final sitePath = site.path.replaceAll(RegExp(r'/+$'), '');
-      return path == sitePath;
-    }
-    return false;
+    if (uri.scheme != 'https') return false;
+    final path = uri.path.replaceFirst(RegExp(r'/+$'), '');
+    final site = Environment.sitePairUri;
+    return (site != null &&
+            uri.origin == site.origin &&
+            path == site.path.replaceFirst(RegExp(r'/+$'), '')) ||
+        (uri.origin == 'https://zangetsu.online' && path == '/pair');
   }
 }

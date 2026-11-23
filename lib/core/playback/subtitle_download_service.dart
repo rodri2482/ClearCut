@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../di/injector.dart';
 import '../metadata/tmdb.dart';
+import 'subtitle_language.dart';
 
 /// Online subtitle lookup for the auto-download feature, in two tiers:
 ///
@@ -39,8 +40,10 @@ class SubtitleDownloadService {
   // `--dart-define=SUBDL_API_KEY=...`. Empty when unset → SubDL tier disabled
   // (keyless Stremio only). SubDL's free tier has no download cap (~2000
   // searches/day shared across installs).
-  static const String subDlApiKey =
-      String.fromEnvironment('SUBDL_API_KEY', defaultValue: '');
+  static const String subDlApiKey = String.fromEnvironment(
+    'SUBDL_API_KEY',
+    defaultValue: '',
+  );
   static const String _subDlApi = 'https://api.subdl.com/api/v1';
   static const String _subDlCdn = 'https://dl.subdl.com';
 
@@ -73,7 +76,13 @@ class SubtitleDownloadService {
 
     // 1. Keyless Stremio tier (needs an IMDb id).
     if (resolvedImdb != null && resolvedImdb.isNotEmpty) {
-      final stremio = await _findStremio(resolvedImdb, isTv, season, episode, iso2);
+      final stremio = await _findStremio(
+        resolvedImdb,
+        isTv,
+        season,
+        episode,
+        iso2,
+      );
       if (stremio.isNotEmpty) return stremio;
     }
 
@@ -102,7 +111,10 @@ class SubtitleDownloadService {
   ) async {
     try {
       final String resourcePath;
-      if (isTv && season != null && episode != null) {
+      if (isTv) {
+        if (season == null || episode == null || season < 0 || episode < 1) {
+          return const [];
+        }
         resourcePath =
             '$_stremioBase/subtitles/series/$imdb:$season:$episode.json';
       } else {
@@ -112,13 +124,21 @@ class SubtitleDownloadService {
       final subtitlesList = res.data?['subtitles'];
       if (subtitlesList is! List) return const [];
       final filter = iso2.trim().toLowerCase();
+      final language = kSubtitleLanguages
+          .where((entry) => entry.iso2 == filter || entry.iso2t == filter)
+          .firstOrNull;
       final out = <({String lang, String url})>[];
+      final seen = <String>{};
       for (final item in subtitlesList) {
         if (item is! Map) continue;
         final lang = (item['lang'] as String?)?.trim() ?? '';
         final url = (item['url'] as String?)?.trim() ?? '';
-        if (url.isEmpty) continue;
-        if (lang.toLowerCase() == filter) out.add((lang: lang, url: url));
+        final matches = language == null
+            ? lang.toLowerCase() == filter
+            : matchesSourceLang(lang, language);
+        if (matches && url.isNotEmpty && seen.add(url)) {
+          out.add((lang: lang, url: url));
+        }
       }
       return out;
     } catch (_) {
@@ -214,8 +234,10 @@ class SubtitleDownloadService {
             ext == '.vtt' ||
             ext == '.sub') {
           final segs = Uri.tryParse(zipUrl)?.pathSegments ?? const <String>[];
-          final token = (segs.isNotEmpty ? segs.last : 'sub')
-              .replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
+          final token = (segs.isNotEmpty ? segs.last : 'sub').replaceAll(
+            RegExp(r'[^A-Za-z0-9_-]'),
+            '',
+          );
           final dir = await getTemporaryDirectory();
           final out = File('${dir.path}/zangetsu-subdl-$token$ext');
           await out.writeAsBytes(file.content as List<int>);
@@ -268,7 +290,11 @@ class SubtitleDownloadService {
 
   /// Searches TMDB for [title] and returns the first result's id, or null.
   /// Only called when no imdbId/tmdbId is available — never on the fast path.
-  Future<int?> _searchTmdbId(String title, {bool isTv = false, int? year}) async {
+  Future<int?> _searchTmdbId(
+    String title, {
+    bool isTv = false,
+    int? year,
+  }) async {
     try {
       final tmdbDio = sl<Dio>();
       final kind = isTv ? 'tv' : 'movie';

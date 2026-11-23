@@ -596,7 +596,9 @@ class ViewerProfileStore {
     final photoIsShared =
         photoUrl != null &&
         _profiles.any(
-          (other) => other.id != profileId && other.photoUrl == photoUrl,
+          (other) =>
+              other.id != profileId &&
+              (other.photoUrl == photoUrl || other.coverUrl == photoUrl),
         );
     final userId = _currentUserId?.call();
     if (userId != null && _remote != null) {

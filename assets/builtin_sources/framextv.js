@@ -2,6 +2,9 @@
 var API = 'https://api.framextv.tech';
 var SITE = 'https://framextv.cc';
 var SOURCE_ID = 'clearcut_framextv';
+var serverLists = new Map();
+var fullResolves = new Map();
+var recentDefaults = new Map();
 var ROWS = [
   ['trending_movies', 'Trending movies', '/api/trending', {type: 'movie'}],
   ['popular_movies', 'Popular movies'],
@@ -16,19 +19,20 @@ var ROWS = [
 ];
 
 function getInfo() {
-  return {name: 'FrameXTV', lang: 'en', baseUrl: SITE, type: 'movie', version: '1.0.0'};
+  return {name: 'FrameXTV', lang: 'en', baseUrl: SITE, type: 'movie', version: '1.1.0'};
 }
 
-function json(path, params) {
+function json(path, params, timeoutMs, allowUnavailable) {
   var query = Object.keys(params || {}).map(function (key) {
     return encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
   }).join('&');
   return fetch(API + path + (query ? '?' + query : ''), {
     headers: {Accept: 'application/json'},
+    timeoutMs: timeoutMs,
   }).then(function (response) {
     if (!response.ok) throw new Error('FrameXTV: HTTP ' + response.status);
     var data = JSON.parse(response.body);
-    if (!data || data.success === false) throw new Error('FrameXTV: unavailable');
+    if (!data || (!allowUnavailable && data.success === false)) throw new Error('FrameXTV: unavailable');
     return data;
   });
 }
@@ -241,7 +245,62 @@ function subtitleTracks(raw) {
   }).filter(Boolean);
 }
 
-function getVideoSources(url) {
+function availableServers(path, params) {
+  var key = path + ':' + params.type + ':' + (params.sub_type || '');
+  var cached = serverLists.get(key);
+  if (cached && cached.expires > Date.now()) return cached.promise;
+  var promise = json(path, {type: params.type, ...(params.sub_type && {sub_type: params.sub_type})}, 3000)
+    .then(function (data) {
+      return list(data.providers).filter(function (server) {
+        return server && /^[a-z0-9_-]+$/i.test(text(server.id)) &&
+          ['active', 'available'].indexOf(text(server.status).toLowerCase()) >= 0;
+      });
+    }).catch(function () {
+      serverLists.delete(key);
+      return [];
+    });
+  serverLists.set(key, {expires: Date.now() + 300000, promise: promise});
+  return promise;
+}
+
+function nativeSources(data, server) {
+  if (data.success === false) return [];
+  var requested = server && text(server.id);
+  var actual = text(data.provider);
+  // A named request may fall back to another server. Use the actual label
+  // if supplied, and never present the fallback as the named selection.
+  var name = !actual || actual === requested ? (server && server.name) : actual;
+  return list(data.sources).map(function (source) {
+    if (!source) return null;
+    var link = mediaUrl(source.url);
+    var type = text(source.type).toLowerCase();
+    if (!link || (type !== 'hls' && type !== 'mp4')) return null;
+    var audio = text(source.audio || data.audio || (server && server.audio)).toLowerCase();
+    var label = text(source.server) || text(data.server) || text(name) || 'FrameXTV';
+    var language = text(source.audioLang || source.audioLanguage || source.language || data.audioLang);
+    return {
+      url: link,
+      container: type,
+      label: audio === 'dub' && !/\bdub\b/i.test(label) ? label + ' · Dub' : label,
+      quality: text(source.quality) || undefined,
+      kind: audio === 'dub' || audio === 'sub' ? audio : 'unknown',
+      audioLang: language || (/\bEnglish\b/i.test(label) ? 'en' : undefined),
+      headers: requestHeaders(data.headers, source.headers),
+      subtitles: subtitleTracks(list(source.subtitles).concat(list(data.subtitles))),
+    };
+  }).filter(Boolean);
+}
+
+function uniqueSources(sources) {
+  var seen = new Set();
+  return sources.filter(function (source) {
+    if (seen.has(source.url)) return false;
+    seen.add(source.url);
+    return true;
+  });
+}
+
+function getVideoSources(url, fast) {
   var ref = parseRef(url);
   if (ref.type === 'tv' && !ref.episode) return [];
   var anime = ref.type === 'anime';
@@ -251,25 +310,62 @@ function getVideoSources(url) {
     params.episode = ref.episode;
   }
   if (anime) params.sub_type = 'sub';
+  var streamPath = anime ? '/anime/api/stream' : '/api/stream';
+  var providersPath = anime ? '/anime/api/providers' : '/api/providers';
+  var cached = fullResolves.get(url);
+  if (!fast && cached && cached.expires > Date.now()) return cached.promise;
 
-  return json(anime ? '/anime/api/stream' : '/api/stream', params).then(function (data) {
-    var seen = new Set();
-    return list(data.sources).map(function (source) {
-      if (!source) return null;
-      var link = mediaUrl(source.url);
-      var type = text(source.type).toLowerCase();
-      if (!link || (type !== 'hls' && type !== 'mp4') || seen.has(link)) return null;
-      seen.add(link);
-      var audio = text(source.audio || data.audio).toLowerCase();
-      return {
-        url: link,
-        container: type,
-        label: text(source.server || data.server) || 'FrameXTV',
-        quality: text(source.quality) || undefined,
-        kind: audio === 'dub' || audio === 'sub' ? audio : 'unknown',
-        headers: requestHeaders(data.headers, source.headers),
-        subtitles: subtitleTracks(list(source.subtitles).concat(list(data.subtitles))),
-      };
-    }).filter(Boolean);
+  var recent = recentDefaults.get(url);
+  var defaultStream = !fast && recent && recent.expires > Date.now()
+    ? Promise.resolve(recent.data)
+    : json(streamPath, params, 6500, true).catch(function () { return {}; });
+  var servers = fast ? null : Promise.all([
+    availableServers(providersPath, params),
+    anime ? availableServers(providersPath, {...params, sub_type: 'dub'}) : [],
+  ]).then(function (groups) {
+    // Ask for dubbed variants early so a slow sub server cannot crowd them
+    // out of the available resolve window.
+    return groups[1].filter(function (server) { return server.audio === 'dub'; }).concat(groups[0]);
   });
+  var promise = defaultStream.then(async function (data) {
+    var sources = nativeSources(data);
+    if (fast && sources.length) {
+      if (recentDefaults.size >= 12) recentDefaults.delete(recentDefaults.keys().next().value);
+      recentDefaults.set(url, {expires: Date.now() + 60000, data: data});
+      return uniqueSources(sources);
+    }
+
+    var options = await (servers || availableServers(providersPath, params));
+    var byId = new Map(options.map(function (server) { return [server.id, server]; }));
+    var ids = Array.from(new Set(list(data.alternates).concat(Array.from(byId.keys()))))
+      .filter(function (id) {
+        return typeof id === 'string' && /^[a-z0-9_-]+$/i.test(id) &&
+          (!sources.length || id !== data.provider);
+      });
+    // Bound network concurrency. The fast path expands only when the default
+    // supplied no native link, and stops as soon as a batch returns one.
+    for (var offset = 0; offset < ids.length; offset += 6) {
+      var results = await Promise.all(ids.slice(offset, offset + 6).map(function (id) {
+        var server = byId.get(id) || {id: id};
+        var query = anime && server.audio === 'dub' ? {...params, sub_type: 'dub'} : params;
+        return json(streamPath, {...query, provider: id}, 4500)
+          .then(function (result) { return nativeSources(result, server); })
+          .catch(function () { return []; });
+      }));
+      sources = sources.concat(...results);
+      if (fast && sources.length) break;
+    }
+    return uniqueSources(sources);
+  });
+  if (!fast) {
+    if (fullResolves.size >= 12) fullResolves.delete(fullResolves.keys().next().value);
+    var entry = {expires: Date.now() + 60000, promise: promise};
+    fullResolves.set(url, entry);
+    promise.then(function (sources) {
+      if (!sources.length && fullResolves.get(url) === entry) fullResolves.delete(url);
+    }, function () {
+      if (fullResolves.get(url) === entry) fullResolves.delete(url);
+    });
+  }
+  return promise;
 }

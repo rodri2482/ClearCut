@@ -527,8 +527,6 @@ class PlayerCubit extends Cubit<PlayerState> {
   /// swept for another. Each hop is a real scrape, so it is bounded: a library
   /// where nothing plays should say so rather than walk thirty sources one
   /// dead link at a time. Reset per episode.
-  int _sourceHops = 0;
-  static const int _maxSourceHops = 3;
   bool _recovering = false;
   // True once the current source has actually produced playback (position
   // advanced). libmpv emits transient "connection"/"failed to open" warnings
@@ -724,7 +722,6 @@ class PlayerCubit extends Cubit<PlayerState> {
     await _cancelProgressive();
     final keepPos = _lastPos;
     _tried.clear();
-    _sourceHops = 0; // a different cut is a fresh set of sources
     _recovering = false;
     emit(
       state.copyWith(
@@ -804,7 +801,54 @@ class PlayerCubit extends Cubit<PlayerState> {
   /// for seconds while `_gen` legitimately advances for unrelated reasons (a
   /// re-open, a quality switch), and keying on that threw away good results.
   /// An episode or Sub/Dub switch changes the URL, which does stop it.
+  final Set<String> _checkingAlternatives = {};
+
+  Future<void> _collectOtherProviders(
+    String epUrl,
+    String category, {
+    bool scanDub = false,
+  }) async {
+    final key = '${scanDub ? 'dub' : 'main'}|$category|$epUrl';
+    if (_checkingAlternatives.contains(key) ||
+        ZmodeIds.parseEpisode(epUrl) == null ||
+        !sl.isRegistered<PlaybackResolver>()) {
+      return;
+    }
+    _checkingAlternatives.add(key);
+    bool abandoned() =>
+        isClosed ||
+        !_checkingAlternatives.contains(key) ||
+        // A dub scan runs alongside the sub scan and must not be cancelled
+        // just because the active track is still sub.
+        (!scanDub && _activeCategory != category) ||
+        _episodeUrl(currentEpisode) != epUrl;
+    try {
+      await for (final sources in sl<PlaybackResolver>().alternativeStreams(
+        epUrl,
+        category: category,
+        abandoned: abandoned,
+      )) {
+        if (abandoned()) return;
+        mergeArrivedStreams(epUrl, sources);
+      }
+    } catch (_) {
+      // The active stream and the existing server list remain available.
+    } finally {
+      _checkingAlternatives.remove(key);
+    }
+  }
+
   Future<void> _pollForMoreSources(String epUrl) async {
+    unawaited(_collectOtherProviders(epUrl, _activeCategory));
+    // English dub discovery must not wait until the viewer opens the Sources
+    // sheet: start a parallel dub scan for anime while the sub track plays, so
+    // an English-audio mirror is already in the list if they want to switch.
+    if (_activeCategory == 'sub' &&
+        (scrobbleTitle != null || malId != null)) {
+      unawaited(
+        _collectOtherProviders(epUrl, 'dub', scanDub: true),
+      );
+    }
     final poll = _pollSources;
     if (poll == null) return;
     // Back off quickly for the usual case, then keep checking CloudStream's
@@ -2284,7 +2328,6 @@ class PlayerCubit extends Cubit<PlayerState> {
     // same-episode re-open (recovery/failover) must keep targeting it.
     if (index != state.currentIndex) _pendingResume = Duration.zero;
     _tried.clear();
-    _sourceHops = 0;
     _recovering = false;
     _skips = const []; // clear previous episode's skip markers
     _skipsForIndex = -1; // refetched when the new duration arrives
@@ -3501,7 +3544,7 @@ class PlayerCubit extends Cubit<PlayerState> {
     // is where it actually bit.
     final canonical = ZmodeIds.parseShow(url);
     if (canonical != null && sl.isRegistered<SourceMatcher>()) {
-      final pinned = sl<SourceMatcher>().pinnedSource(canonical);
+      final pinned = sl<SourceMatcher>().sourceForTitle(canonical);
       if (pinned != null) {
         debugPrint(
           '[player] source failover · $pinned is pinned by hand — not '
@@ -3509,12 +3552,6 @@ class PlayerCubit extends Cubit<PlayerState> {
         );
         return false;
       }
-    }
-    // Bounded. Each hop is a real scrape, and a library where nothing plays
-    // should say so rather than walk thirty sources one dead link at a time.
-    if (_sourceHops >= _maxSourceHops) {
-      debugPrint('[player] source failover · stopping after $_sourceHops hops');
-      return false;
     }
     final epUrl = _episodeUrl(currentEpisode);
     final gen = _gen;
@@ -3528,7 +3565,6 @@ class PlayerCubit extends Cubit<PlayerState> {
     // Failover re-resolves and emits a fresh list: a progressive subscription
     // still feeding the old sweep would merge its dead links straight back.
     await _cancelProgressive();
-    _sourceHops++;
     resolver.markSourceUnplayable(epUrl, winner, category: _activeCategory);
     _toast('That one didn\'t cut. Trying another source.');
     try {

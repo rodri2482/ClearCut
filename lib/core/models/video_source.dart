@@ -161,15 +161,19 @@ class VideoSource extends Equatable {
     this.drmKey,
   });
 
-  VideoSource withSubtitles(List<Subtitle> tracks) => VideoSource(
+  VideoSource withSubtitles(List<Subtitle> tracks) => _with(subtitles: tracks);
+
+  VideoSource withLabel(String label) => _with(label: label);
+
+  VideoSource _with({String? label, List<Subtitle>? subtitles}) => VideoSource(
     url: url,
     quality: quality,
-    label: label,
+    label: label ?? this.label,
     container: container,
     headers: headers,
     kind: kind,
     audioLang: audioLang,
-    subtitles: tracks,
+    subtitles: subtitles ?? this.subtitles,
     subtitleSkewSeconds: subtitleSkewSeconds,
     subtitleSkewAfterSeconds: subtitleSkewAfterSeconds,
     proxyUrl: proxyUrl,

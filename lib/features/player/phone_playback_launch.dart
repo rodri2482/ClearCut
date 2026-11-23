@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/zmode/zmode_ids.dart';
+import '../../core/zmode/episode_number.dart';
 import '../../core/zmode/source_matcher.dart';
 import '../../core/zmode/playback_resolver.dart';
 import '../../core/di/injector.dart';
@@ -16,9 +17,12 @@ import '../../core/download/download_record.dart';
 import '../downloads/episode_download_source_sheet.dart'
     show matchDownloadEpisode, resolveEpisodeDownloadShowId;
 import '../../core/repository/catalogue_repository.dart';
+import '../../core/provider/bundled_sources.dart';
 import '../../core/discord/discord_rpc.dart';
 import '../../core/discord/discord_presence.dart';
 import '../../core/share/share_link.dart';
+import '../../core/share/last_playback.dart';
+import '../../core/models/media_item.dart';
 import '../../core/models/provider_info.dart';
 import '../../core/models/episode.dart';
 import '../../core/models/video_source.dart';
@@ -42,6 +46,43 @@ import 'player_engine_fallback.dart';
 import 'subtitle_style.dart';
 import 'watch_page_info.dart';
 import '../detail/cubit/detail_cubit.dart' show seasonOf;
+
+String phoneEpisodeLabel(
+  Episode episode, {
+  required String showTitle,
+  required bool isMovie,
+  required int episodeCount,
+}) {
+  final title = episode.title.trim();
+  if (isMovie) {
+    if (episodeCount == 1 && showTitle.trim().isNotEmpty) {
+      return showTitle.trim();
+    }
+    return title.isNotEmpty ? title : showTitle;
+  }
+  final number = episode.number;
+  final base = number == null
+      ? ''
+      : 'Episode ${number % 1 == 0 ? number.toInt() : number}';
+  // Many sources title their rows "Episode 1: Asteroid Blues". Keeping that
+  // prefix while adding our own number shows "Episode 1 · Episode 1: …".
+  final withoutPrefix =
+      title
+          .replaceFirst(
+            RegExp(r'^episode\s*\d+(?:\.\d+)?\s*[:\-–—.]?\s*',
+                caseSensitive: false),
+            '',
+          )
+          .trim();
+  final displayTitle = withoutPrefix.isEmpty ? title : withoutPrefix;
+  final lower = displayTitle.toLowerCase();
+  if (displayTitle.isEmpty ||
+      lower == base.toLowerCase() ||
+      lower == showTitle.trim().toLowerCase()) {
+    return base;
+  }
+  return base.isEmpty ? displayTitle : '$base · $displayTitle';
+}
 
 /// Rejects stale sessions and malformed writes before touching saved controls.
 PlayerControlsConfig? phoneControlLayoutForSave(
@@ -162,13 +203,20 @@ String phoneMirrorLabel(VideoSource src, int i) {
   return 'Server ${i + 1}';
 }
 
+const _onlineSubtitleProvider = 'OpenSubtitles';
+
 Map<String, dynamic> _phoneSubtitlePayload(VideoSource source) {
+  final online = [
+    for (final subtitle in source.subtitles)
+      if (subtitle.providerName == _onlineSubtitleProvider) subtitle.url,
+  ];
   return <String, dynamic>{
     'subUrls': [for (final s in source.subtitles) s.url],
     'subLangs': [for (final s in source.subtitles) s.lang],
     'subLabels': [for (final s in source.subtitles) s.displayLabel],
     'subFormats': [for (final s in source.subtitles) s.format ?? ''],
     'subDefaults': [for (final s in source.subtitles) s.isDefault],
+    if (online.isNotEmpty) 'onlineSubtitleUrls': online,
   };
 }
 
@@ -186,7 +234,19 @@ Future<Subtitle?> autoDownloadedPhoneSubtitle({
   String? label,
   required Future<List<({String lang, String url})>> Function() fetch,
 }) async {
-  if (existing.isNotEmpty || !autoDownload || !hasIdentifiers) return null;
+  final language = kSubtitleLanguages
+      .where((entry) => entry.iso2 == iso2)
+      .firstOrNull;
+  if (!autoDownload ||
+      !hasIdentifiers ||
+      existing.any(
+        (track) => language == null
+            ? track.lang == iso2
+            : matchesSourceLang(track.lang, language) ||
+                  matchesSourceLang(track.label ?? '', language),
+      )) {
+    return null;
+  }
   late final List<({String lang, String url})> found;
   try {
     found = await fetch();
@@ -207,6 +267,7 @@ Future<Subtitle?> autoDownloadedPhoneSubtitle({
     url: url,
     lang: lang.isNotEmpty ? lang : iso2,
     label: label ?? (lang.isNotEmpty ? lang : iso2),
+    providerName: _onlineSubtitleProvider,
     format: format,
     isDefault: true,
   );
@@ -520,11 +581,13 @@ class PhoneNativePlayer {
   static PhonePlaybackFailure? _pendingEngineFailure;
   static bool _forceInitialResume = false;
   static final _engineSources = <int, List<VideoSource>>{};
+  static final _otherSources = <(int, String), List<VideoSource>>{};
+  static final _otherSourceChecks = <(int, String), DateTime>{};
+  static final _firstOtherSource = <(int, String), Completer<void>>{};
+  static int? _playingIndex;
 
   /// ClearCut: how many times this session moved on to another source after
   /// one failed in the player. Each hop is a real scrape, so it is capped.
-  static int _sourceHops = 0;
-  static const int _maxSourceHops = 4;
 
   static List<VideoSource> _rememberEngineSources(
     int index,
@@ -561,6 +624,122 @@ class PhoneNativePlayer {
     final raw = _engineSources[index];
     if (raw == null || raw.isEmpty) return null;
     return _blockedFiltered(index, raw);
+  }
+
+  static List<VideoSource> _mergeMirrors(
+    List<VideoSource> current,
+    List<VideoSource> extra,
+  ) {
+    final seen = <String>{};
+    return [
+      for (final source in [...current, ...extra])
+        if (seen.add(source.url)) source,
+    ];
+  }
+
+  static Future<String?> _canonicalEpisode(Episode episode) async {
+    if (ZmodeIds.parseEpisode(episode.url) != null) return episode.url;
+    final tmdbId = _tmdbId;
+    if (tmdbId == null) return null;
+    final show = ZCanonical(_tmdbIsTv ? ZKind.tv : ZKind.movie, 'tmdb:$tmdbId');
+    if (!_tmdbIsTv) {
+      return _isMovie ? ZmodeIds.episodeUrl(show, 1) : null;
+    }
+    final season = seasonOf(episode);
+    final number = episode.number?.toInt();
+    if (season == null || number == null || number < 1) return null;
+    final episodes = await sl<CatalogueRepository>().episodes(
+      ZmodeIds.showUrl(show),
+      sourceId: ZmodeIds.sourceId,
+    );
+    final inSeason = episodes.where((entry) => seasonOf(entry) == season).toList();
+    // A positional skip is wrong as soon as the source has a recap, special or
+    // a gap in its numbering: choosing "2" would silently canonicalise to the
+    // fourth row and play a different episode. Match by the actual number and
+    // refuse a positional fallback that lands on a different number.
+    final index = resolveEpisodeIndex(inSeason, number);
+    if (index < 0 || index >= inSeason.length) return null;
+    final chosenNumber = sourceEpisodeNumber(inSeason[index]);
+    if (chosenNumber != null && (chosenNumber - number).abs() > 0.5) {
+      return null;
+    }
+    return inSeason[index].url;
+  }
+
+  static Future<void>? _checkOtherSources(int index, {String? searchCategory}) {
+    if (_peek || !_allowDownloads || !sl.isRegistered<PlaybackResolver>()) {
+      return null;
+    }
+    final episode = _episodes[index];
+    final session = _sessionId;
+    final activeCategory = _category;
+    final category = searchCategory ?? activeCategory;
+    final key = (index, category);
+    final checked = _otherSourceChecks[key];
+    if (checked != null &&
+        DateTime.now().difference(checked) < const Duration(minutes: 3)) {
+      return _firstOtherSource[key]?.future;
+    }
+    _otherSourceChecks[key] = DateTime.now();
+    _otherSources.remove(key);
+    final first = Completer<void>();
+    _firstOtherSource[key] = first;
+    bool abandoned() =>
+        session != _sessionId ||
+        activeCategory != _category ||
+        _closed?.isCompleted != false ||
+        (_playingIndex != null && _playingIndex != index);
+    unawaited(() async {
+      try {
+        final canonical = await _canonicalEpisode(episode);
+        if (canonical == null || abandoned()) return;
+        final resolver = sl<PlaybackResolver>();
+        await for (final choices in resolver.alternativeStreams(
+          canonical,
+          currentSourceId: _sourceId == ZmodeIds.sourceId ? null : _sourceId,
+          category: category,
+          abandoned: abandoned,
+        )) {
+          if (abandoned()) break;
+          final prepared = await _prepareSources(choices);
+          if (abandoned()) break;
+          _otherSources[key] = _mergeMirrors(
+            _otherSources[key] ?? const [],
+            prepared,
+          );
+          if (!first.isCompleted) first.complete();
+        }
+      } catch (error) {
+        debugPrint('[phone] alternative sources · $error');
+      } finally {
+        if (!first.isCompleted) first.complete();
+        if (identical(_firstOtherSource[key], first)) {
+          _firstOtherSource.remove(key);
+          if (abandoned()) _otherSourceChecks.remove(key);
+        }
+      }
+    }());
+    return first.future;
+  }
+
+  static Future<List<({String lang, String url})>> _findSubtitles(
+    Episode episode,
+    Language language,
+  ) {
+    final season = seasonOf(episode) ?? 1;
+    final number = ZmodeIds.parseEpisode(episode.url)?.show.kind == ZKind.tv
+        ? seasonEpisodeOf(_episodes, episode) ?? episode.number?.toInt()
+        : episode.number?.toInt();
+    return SubtitleDownloadService().find(
+      imdbId: _imdbId,
+      tmdbId: _tmdbId,
+      isTv: _tmdbIsTv,
+      season: _tmdbIsTv ? season : null,
+      episode: _tmdbIsTv ? number : null,
+      title: _showTitle.isNotEmpty ? _showTitle : null,
+      iso2: language.iso2,
+      iso1: language.iso1,
+    );
   }
 
   /// Returns false when the Activity cannot be started; stream errors are
@@ -602,7 +781,10 @@ class PhoneNativePlayer {
     _forceInitialResume = forceInitialResume;
     _pendingEngineFailure = null;
     _engineSources.clear();
-    _sourceHops = 0;
+    _otherSources.clear();
+    _otherSourceChecks.clear();
+    _firstOtherSource.clear();
+    _playingIndex = null;
     _resolve = resolveSources;
     _pollSources = pollSources;
     _peek = peek;
@@ -628,6 +810,25 @@ class PhoneNativePlayer {
     _sessionId++;
     _prefetchedEpisodes.clear();
     _isMovie = isMovie;
+    // Remember where we were: if the player Activity or the process is killed,
+    // the next cold start reopens this title instead of dropping the viewer at
+    // Home. Cleared when the player closes normally.
+    unawaited(
+      LastPlayback.remember(
+        ShareLink.forItem(
+          MediaItem(
+            id: showUrl ?? sourceId,
+            title: _showTitle.isNotEmpty
+                ? _showTitle
+                : (_scrobbleTitle ?? ''),
+            url: showUrl ?? sourceId,
+            type: isMovie ? ProviderType.movie : ProviderType.anime,
+            sourceId: sourceId,
+            cover: cover,
+          ),
+        ),
+      ),
+    );
     _resume = resume;
     _history = history;
     if (!_handlerBound) {
@@ -771,6 +972,28 @@ class PhoneNativePlayer {
 
   static Future<dynamic> _onNativeCall(MethodCall call) async {
     switch (call.method) {
+      case 'englishSubtitles':
+        final args = _callArgs(call);
+        final index = phoneWatchActionIndex(
+          args,
+          sessionId: _sessionId,
+          episodeCount: _episodes.length,
+          playerOpen: _closed?.isCompleted == false && !_peek,
+        );
+        if (index == null) return null;
+        final session = _sessionId;
+        final tracks = await _findSubtitles(
+          _episodes[index],
+          languageByPref('en')!,
+        );
+        if (session != _sessionId || _closed?.isCompleted != false) return null;
+        final subtitles = [
+          for (final (i, track) in tracks.take(8).indexed)
+            Subtitle(url: track.url, lang: 'en', label: 'English · ${i + 1}'),
+        ];
+        return _phoneSubtitlePayload(
+          VideoSource(url: '', subtitles: subtitles),
+        );
       case 'rememberStremioLink':
       case 'addonSubtitles':
         final args = _callArgs(call);
@@ -837,11 +1060,22 @@ class PhoneNativePlayer {
         return null;
       case 'resolveEpisode':
         final rArgs = _callArgs(call);
+        final playerSession = rArgs?['sessionId'];
+        if (playerSession != null && playerSession != _sessionId) return null;
         final index = (rArgs?['index'] as num?)?.toInt() ?? -1;
         if (index < 0 || index >= _episodes.length) return null;
         return _resolveEpisode(index);
       case 'playbackStarted':
-        final index = (_callArgs(call)?['index'] as num?)?.toInt() ?? -1;
+        final args = _callArgs(call);
+        if (!_matchesSession(args)) return null;
+        final index = (args?['index'] as num?)?.toInt() ?? -1;
+        if (!_peek &&
+            _closed?.isCompleted == false &&
+            index >= 0 &&
+            index < _episodes.length) {
+          _playingIndex = index;
+          _checkOtherSources(index);
+        }
         if (!phoneShouldScrobbleOnFirstFrame(
           playerOpen: _closed?.isCompleted == false,
           alreadyScrobbled: _scrobbled,
@@ -1154,6 +1388,7 @@ class PhoneNativePlayer {
         return true;
       case 'sourcesFor':
         final args = _callArgs(call);
+        if (!_matchesSession(args)) return const <Map>[];
         final index = (args?['index'] as num?)?.toInt() ?? -1;
         if (index < 0 || index >= _episodes.length) return const <Map>[];
         // Reuse what the episode's own open/switch already resolved instead
@@ -1162,31 +1397,63 @@ class PhoneNativePlayer {
         // (and native's own mirror failover, which hits this same case)
         // would sit there not opening until the original load cleared.
         final cached = _cachedSourcesFor(index);
-        if (cached != null) {
-          return [
-            for (var i = 0; i < cached.length; i++)
-              phoneSourceMap(cached[i], i),
-          ];
-        }
+        final episode = _episodes[index];
+        final resolver =
+            _sourceId == ZmodeIds.sourceId &&
+                sl.isRegistered<PlaybackResolver>()
+            ? sl<PlaybackResolver>()
+            : null;
+        final frameXtv =
+            _sourceId == frameXtvSourceId ||
+            resolver?.resolvedSourceId(episode.url, category: _category) ==
+                frameXtvSourceId;
+        _checkOtherSources(index);
         final session = _sessionId;
         final requestCategory = _category;
-        final sources = await _resolveSources(
-          _episodes[index],
-          preferPolled: true,
-        );
+        final findDub =
+            args?['preferEnglish'] == true &&
+            requestCategory != 'dub' &&
+            ZmodeIds.parseEpisode(episode.url)?.show.kind == ZKind.anime;
+        final dubCheck = findDub
+            ? _checkOtherSources(index, searchCategory: 'dub')
+            : null;
+        if (dubCheck != null && !frameXtv) {
+          await dubCheck.timeout(const Duration(seconds: 4), onTimeout: () {});
+          if (session != _sessionId ||
+              requestCategory != _category ||
+              _closed?.isCompleted != false) {
+            return const <Map>[];
+          }
+        }
+        List<VideoSource> alternatives() => [
+          ...?_otherSources[(index, requestCategory)],
+          if (findDub) ...?_otherSources[(index, 'dub')],
+        ];
+        if (cached != null && !frameXtv) {
+          final choices = _mergeMirrors(cached, alternatives());
+          return [
+            for (var i = 0; i < choices.length; i++)
+              phoneSourceMap(choices[i], i),
+          ];
+        }
+        final sources = await _resolveSources(episode, preferPolled: true);
+        final merged = _mergeMirrors(cached ?? const [], sources);
         final prepared = _rememberEngineSources(
           index,
-          await _prepareSources(sources),
+          await _prepareSources(merged),
           session: session,
           category: requestCategory,
         );
-        if (session != _sessionId || _closed?.isCompleted != false) {
+        if (session != _sessionId ||
+            requestCategory != _category ||
+            _closed?.isCompleted != false) {
           return const <Map>[];
         }
         if (_sourceId == stremioSourceId) _stremioSources[index] = prepared;
+        final choices = _mergeMirrors(prepared, alternatives());
         return [
-          for (var i = 0; i < prepared.length; i++)
-            phoneSourceMap(prepared[i], i),
+          for (var i = 0; i < choices.length; i++)
+            phoneSourceMap(choices[i], i),
         ];
       case 'nextSource':
         // ClearCut: every link of the current source failed in the player.
@@ -1196,9 +1463,9 @@ class PhoneNativePlayer {
         // source the viewer pinned by hand.
         {
           final args = _callArgs(call);
+          if (!_matchesSession(args)) return const <Map>[];
           final index = (args?['index'] as num?)?.toInt() ?? -1;
           if (index < 0 || index >= _episodes.length) return const <Map>[];
-          if (_sourceHops >= _maxSourceHops) return const <Map>[];
           final epUrl = _episodes[index].url;
           final canonical = ZmodeIds.parseShow(epUrl);
           if (ZmodeIds.parseEpisode(epUrl) == null ||
@@ -1207,13 +1474,12 @@ class PhoneNativePlayer {
             return const <Map>[];
           }
           if (sl.isRegistered<SourceMatcher>() &&
-              sl<SourceMatcher>().pinnedSource(canonical) != null) {
+              sl<SourceMatcher>().sourceForTitle(canonical) != null) {
             return const <Map>[];
           }
           final resolver = sl<PlaybackResolver>();
           final winner = resolver.resolvedSourceId(epUrl, category: _category);
           if (winner == null) return const <Map>[];
-          _sourceHops++;
           resolver.markSourceUnplayable(epUrl, winner, category: _category);
           _engineSources.remove(index);
           final session = _sessionId;
@@ -1226,7 +1492,9 @@ class PhoneNativePlayer {
               session: session,
               category: requestCategory,
             );
-            if (session != _sessionId || _closed?.isCompleted != false) {
+            if (session != _sessionId ||
+                requestCategory != _category ||
+                _closed?.isCompleted != false) {
               return const <Map>[];
             }
             return [
@@ -1245,6 +1513,7 @@ class PhoneNativePlayer {
           // normal resolution path — a failed resolve returns null and the
           // player keeps playing instead of jumping anywhere.
           final args = _callArgs(call);
+          if (!_matchesSession(args)) return null;
           final cat = args?['category'] as String?;
           final index = (args?['index'] as num?)?.toInt() ?? -1;
           if (cat == null ||
@@ -1306,6 +1575,7 @@ class PhoneNativePlayer {
       case 'playerClosed':
         final closingArgs = _callArgs(call);
         if (closingArgs?['sessionId'] == _sessionId) {
+          unawaited(LastPlayback.clear());
           _syncSimkl({
             ...?closingArgs,
             'index': closingArgs?['episodeIndex'],
@@ -1428,6 +1698,9 @@ class PhoneNativePlayer {
     return raw is Map ? raw.cast<String, dynamic>() : null;
   }
 
+  static bool _matchesSession(Map<String, dynamic>? args) =>
+      args?['sessionId'] == null || args?['sessionId'] == _sessionId;
+
   static Future<Map<String, dynamic>?> _resolveEpisode(int index) async {
     final session = _sessionId;
     final category = _category;
@@ -1452,15 +1725,11 @@ class PhoneNativePlayer {
     final src0 = seed == null ? _pickSource(prepared, ep) : prepared.first;
     if (src0 == null) return null;
     var src = src0;
-    // Keyless auto-download for subtitle-less sources: the native player has
-    // no fetch of its own, so mirror the built-in player's silent fallback
-    // here at resolve time (URL-handed, like the TV player — no temp files).
-    if (src.subtitles.isEmpty && sl<PlaybackPrefs>().autoDownloadSubtitles) {
+    if (sl<PlaybackPrefs>().autoDownloadSubtitles) {
       final prefLang = languageByPref(
         sl<PlaybackPrefs>().preferredSubtitleLanguage,
       );
       if (prefLang != null) {
-        final epNum = ep.number?.toInt();
         final dl = await autoDownloadedPhoneSubtitle(
           existing: src.subtitles,
           autoDownload: true,
@@ -1470,19 +1739,10 @@ class PhoneNativePlayer {
               _showTitle.isNotEmpty,
           iso2: prefLang.iso2,
           label: prefLang.name,
-          fetch: () => SubtitleDownloadService().find(
-            imdbId: _imdbId,
-            tmdbId: _tmdbId,
-            isTv: _tmdbIsTv,
-            season: _tmdbIsTv ? 1 : null,
-            episode: _tmdbIsTv ? epNum : null,
-            title: _showTitle.isNotEmpty ? _showTitle : null,
-            iso2: prefLang.iso2,
-            iso1: prefLang.iso1,
-          ),
+          fetch: () => _findSubtitles(ep, prefLang),
         );
         if (session != _sessionId || category != _category) return null;
-        if (dl != null) src = src.withSubtitles([dl]);
+        if (dl != null) src = src.withSubtitles([...src.subtitles, dl]);
       }
     }
     final position = index == _startIndex && _forceInitialResume
@@ -1564,6 +1824,27 @@ class PhoneNativePlayer {
     bool preferPolled = false,
   }) async {
     final url = tvEpisodeUrl(ep.url, _category);
+    if (_allowDownloads &&
+        _sourceId == ZmodeIds.sourceId &&
+        ZmodeIds.parseEpisode(url) != null &&
+        sl.isRegistered<PlaybackResolver>()) {
+      final resolver = sl<PlaybackResolver>();
+      if (preferPolled &&
+          resolver.resolvedSourceId(url, category: _category) != null) {
+        final polled = await resolver.polledSources(url, category: _category);
+        if (polled.sources.isNotEmpty) return polled.sources;
+      }
+      return resolver.sources(url, fast: true, category: _category);
+    }
+    if (preferPolled &&
+        _sourceId == frameXtvSourceId &&
+        sl.isRegistered<CatalogueRepository>()) {
+      final mirrors = await sl<CatalogueRepository>().polledSources(
+        url,
+        sourceId: _sourceId,
+      );
+      if (mirrors.sources.isNotEmpty) return mirrors.sources;
+    }
     if (preferPolled && _pollSources != null) {
       try {
         final deadline = DateTime.now().add(const Duration(seconds: 3));
@@ -1664,24 +1945,10 @@ class PhoneNativePlayer {
     }
   }
 
-  static String _episodeLabel(Episode ep) {
-    if (_isMovie) {
-      if (_episodes.length == 1 && _showTitle.trim().isNotEmpty) {
-        return _showTitle.trim();
-      }
-      final t = ep.title.trim();
-      return t.isNotEmpty ? t : _showTitle;
-    }
-    final n = ep.number;
-    final base = n == null ? '' : 'Episode ${n % 1 == 0 ? n.toInt() : n}';
-    // Episode.title is non-nullable (episode.dart:31) but can be empty.
-    final t = ep.title.trim();
-    final lower = t.toLowerCase();
-    if (t.isEmpty ||
-        lower == base.toLowerCase() ||
-        lower == _showTitle.trim().toLowerCase()) {
-      return base;
-    }
-    return base.isEmpty ? t : '$base · $t';
-  }
+  static String _episodeLabel(Episode ep) => phoneEpisodeLabel(
+    ep,
+    showTitle: _showTitle,
+    isMovie: _isMovie,
+    episodeCount: _episodes.length,
+  );
 }

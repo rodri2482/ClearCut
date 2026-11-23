@@ -20,6 +20,7 @@ import 'package:watch_app/core/zmode/mal_catalogue.dart';
 import 'package:watch_app/core/provider/cf_solve_needed.dart';
 import 'package:watch_app/core/ui/streaming_prefs.dart';
 import 'package:watch_app/core/zmode/match_store.dart';
+import 'package:watch_app/core/zmode/stream_probe.dart';
 import 'package:watch_app/core/zmode/zmode_source_prefs.dart';
 import 'package:watch_app/core/zmode/metadata_repository.dart';
 import 'package:watch_app/core/zmode/metadata_filters.dart';
@@ -79,6 +80,7 @@ MetadataRepository _metaRepo({
   matchStore: store,
   sourcePrefs: prefs,
   health: SourceHealthStore(),
+  streamProbe: TrustingStreamProbe(),
   candidates: candidates ?? ((_) => [(id: 'allanime', name: 'AllAnime')]),
   browseKind: browseKind,
 );

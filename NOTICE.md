@@ -1,8 +1,17 @@
 ClearCut
 A modified version of Zangetsu, combined with the NoFlix ad-free web player.
 Modifications (2026): rebranded as ClearCut; added the NoFlix ad-blocking web
-player and ad-block engine; disabled the upstream cloud services and updater.
+player and ad-block engine; replaced the upstream cloud services with an
+optional Supabase backend; kept the in-app updater.
 Licensed under the GNU General Public License version 3.0 (GPL-3.0).
+
+Source availability (GPL-3.0 section 6)
+  Every signed APK published from this project must have its complete
+  corresponding source published under the same GPL-3.0 license, including the
+  modified Android/Kotlin and Dart sources and any vendored libraries that
+  require it. The APK alone in a private releases repository is not enough.
+  Publish the source before publishing a release, and link to it from the
+  release notes and the app's About page.
 
 The original copyright and third-party notices follow unchanged.
 ════════════════════════════════════════════════════════════════════════════

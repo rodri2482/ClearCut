@@ -13,6 +13,7 @@ import '../../core/backup/backup_file.dart';
 import '../../core/backup/backup_payload.dart';
 import '../../core/backup/backup_service.dart';
 import '../../core/di/injector.dart';
+import '../../core/environment.dart';
 import '../../core/profiles/profile_lock_store.dart';
 import '../../core/profiles/profile_lock_remote.dart';
 import '../../core/profiles/viewer_profile.dart';
@@ -447,7 +448,7 @@ class _BackupScreenState extends State<BackupScreen> {
                     subtitle: context.l10n.saveABackupFileToYourDownloadsFolder,
                     onTap: _busy ? null : _saveToFile,
                   ),
-                  if (kCloudEnabled)
+                  if (kCloudEnabled && Environment.vpsSyncConfigured)
                     SettingsTile(
                       icon: Icons.cloud_upload_outlined,
                       title: context.l10n.backUpToCloud,
@@ -465,7 +466,7 @@ class _BackupScreenState extends State<BackupScreen> {
                     subtitle: context.l10n.pickABackupFileYouSavedEarlier,
                     onTap: _busy ? null : _restoreFromFile,
                   ),
-                  if (kCloudEnabled)
+                  if (kCloudEnabled && Environment.vpsSyncConfigured)
                     SettingsTile(
                       icon: Icons.cloud_download_outlined,
                       title: context.l10n.restoreFromCloud,
@@ -474,7 +475,15 @@ class _BackupScreenState extends State<BackupScreen> {
                     ),
                 ],
               ),
-              if (kCloudEnabled && uid != null)
+              if (kCloudEnabled && !Environment.vpsSyncConfigured)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Text(
+                    'Cloud backup is unavailable in this build. You can save and restore backup files on this device.',
+                    style: AppText.caption,
+                  ),
+                ),
+              if (kCloudEnabled && Environment.vpsSyncConfigured && uid != null)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                   child: FutureBuilder<DateTime?>(

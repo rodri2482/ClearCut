@@ -279,7 +279,7 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
             Expanded(
               child: _cap == SourceOrderPrefs.allSourcesCap
                   ? Text(
-                      'Try every installed source',
+                      'Manual check: all sources',
                       style: AppText.body.copyWith(
                         color: AppColors.textPrimary,
                       ),
@@ -287,7 +287,7 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
                   : Text.rich(
                       TextSpan(
                         children: [
-                          const TextSpan(text: 'Try the top '),
+                          const TextSpan(text: 'Manual check: top '),
                           TextSpan(
                             text: '$_cap',
                             style: AppText.body.copyWith(
@@ -384,10 +384,8 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 2, 16, 14),
         child: Text(
-          'Auto Resolve tries them in order and stops at the first one that '
-          'has the title. Drag for 3–$kAutoResolveCap, or tap All to check '
-          'every installed source — slower when nothing has the title, but '
-          "it won't miss one further down the list.",
+          'Auto Resolve starts with your priority sources and keeps checking until a stream is ready. '
+          'This limit applies to manual source checks.',
           style: AppText.caption.copyWith(color: AppColors.textTertiary),
         ),
       ),
@@ -499,7 +497,7 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
 
   Widget _row(ZKind kind, ({String id, String name}) s, int index) {
     final health = _health(s.id);
-    final tried = index < _cap;
+    final tried = _cap == SourceOrderPrefs.allSourcesCap || index < _cap;
     // The cut is drawn UNDER the last tried row rather than as its own list
     // entry: a divider child inside a ReorderableListView is itself draggable
     // and shifts every index after it. Hanging it off the row keeps the list
@@ -599,7 +597,7 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
             // above), and it must not tell anyone to raise a number that is
             // already at its maximum. Dragging one up works at every setting,
             // so that is the action it names.
-            'Auto Resolve stops here · drag one up to use it',
+            'Manual check stops here · drag a source up to include it',
             style: AppText.caption.copyWith(
               color: AppColors.accent.withValues(alpha: 0.9),
               fontSize: 10.5,
@@ -669,7 +667,7 @@ class _SourcePriorityScreenState extends State<SourcePriorityScreen> {
     // Same two signals the phone row carries. Without them the number at the
     // top of a TV screen is a setting with nothing on screen showing what it
     // did — which is the state this whole screen was rewritten to leave.
-    final tried = index < _cap;
+    final tried = _cap == SourceOrderPrefs.allSourcesCap || index < _cap;
     final atCut = index == _cap - 1;
     return Column(
       key: ValueKey(s.id),

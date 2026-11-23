@@ -17,6 +17,7 @@ class SyncedProfileLockStore extends ProfileLockStore {
     this.onGrantsChanged,
     this.isolateGuestData,
     this.isOffline,
+    this.cloudConfigured = true,
   }) : _remote = remote,
        _currentUserId = currentUserId,
        _secure = storage ?? const FlutterSecureStorage();
@@ -27,6 +28,8 @@ class SyncedProfileLockStore extends ProfileLockStore {
   final void Function(Map<String, String>)? onGrantsChanged;
   final Future<void> Function()? isolateGuestData;
   final bool Function()? isOffline;
+  final bool cloudConfigured;
+  final _localUnlocked = <String>{};
   final _grants = <String, ({String token, int version, DateTime expires})>{};
   final _versions = <String, int>{};
   final _recoveryCodes = <String, String>{};
@@ -44,6 +47,7 @@ class SyncedProfileLockStore extends ProfileLockStore {
   }) async {
     final owner = _checkOwner();
     if (owner == null) throw const ProfileLockException('sign_in_required');
+    if (!cloudConfigured) throw const ProfileLockException('online_required');
     try {
       final result = await _remote.request(
         action,
@@ -72,6 +76,7 @@ class SyncedProfileLockStore extends ProfileLockStore {
       _versions.clear();
       _recoveryCodes.clear();
       _offlineUnlocked.clear();
+      _localUnlocked.clear();
       super.clearSwitchApprovals();
       onGrantsChanged?.call(const {});
     }
@@ -172,6 +177,9 @@ class SyncedProfileLockStore extends ProfileLockStore {
     final statusKey = _key('status', id);
     // Boot already probed the network dead: the status RPC below would hang
     // ~15s before landing on this same cache fallback. Go straight there.
+    if (!cloudConfigured) {
+      return _cachedStatus(id, owner, statusKey, allowMissing: true);
+    }
     if (isOffline?.call() == true) return _cachedStatus(id, owner, statusKey);
     try {
       return await _status(id);
@@ -184,13 +192,15 @@ class SyncedProfileLockStore extends ProfileLockStore {
   Future<Map<String, dynamic>> _cachedStatus(
     String id,
     String owner,
-    String statusKey,
-  ) async {
+    String statusKey, {
+    bool allowMissing = false,
+  }) async {
     final saved = await _read(statusKey);
     if (_checkOwner() != owner) {
       throw const ProfileLockException('session_changed');
     }
     if (saved == null) {
+      if (allowMissing) return {'locked': false};
       throw const ProfileLockException('offline_pin_unavailable');
     }
     if (saved['locked'] is! bool ||
@@ -282,6 +292,7 @@ class SyncedProfileLockStore extends ProfileLockStore {
   bool isUnlocked(String profileId) {
     final online = grantHeaders.containsKey(profileId);
     return online ||
+        _localUnlocked.contains(profileId) ||
         (_offlineUnlocked.containsKey(profileId) &&
             _offlineUnlocked[profileId] == _versions[profileId]);
   }
@@ -292,6 +303,7 @@ class SyncedProfileLockStore extends ProfileLockStore {
     _lockRevision++;
     _grants.remove(profileId);
     _offlineUnlocked.remove(profileId);
+    _localUnlocked.remove(profileId);
     super.lockEntry(profileId);
     onGrantsChanged?.call(grantHeaders);
   }
@@ -325,6 +337,23 @@ class SyncedProfileLockStore extends ProfileLockStore {
 
   @override
   Future<bool> verify(String profileId, String pin, {String? localPin}) async {
+    if (!cloudConfigured) {
+      final owner = _checkOwner();
+      final revision = _lockRevision;
+      final status = await _entryStatus(profileId);
+      final hasLegacy = await super.isLocked(profileId);
+      if (hasLegacy && !await super.verify(profileId, localPin ?? pin)) {
+        return false;
+      }
+      // The legacy verifier marks the profile unlocked; wait for both checks.
+      if (hasLegacy) super.lockEntry(profileId);
+      if (status['locked'] == true) return _verifyOffline(profileId, pin);
+      if (_checkOwner() != owner || _lockRevision != revision) {
+        throw const ProfileLockException('session_changed');
+      }
+      if (hasLegacy) _localUnlocked.add(profileId);
+      return hasLegacy;
+    }
     try {
       final hasLegacy = await super.isLocked(profileId);
       final originalPin = localPin == null || localPin.trim().isEmpty
@@ -368,6 +397,10 @@ class SyncedProfileLockStore extends ProfileLockStore {
     if (_checkOwner() == null) {
       throw const ProfileLockException('sign_in_required');
     }
+    if (!cloudConfigured) {
+      await _authorizeLocalChange(profileId, currentPin);
+      return super.setPin(profileId, pin);
+    }
     if (await super.isLocked(profileId) &&
         !await super.verify(profileId, currentPin ?? '')) {
       throw const ProfileLockException('verification_failed');
@@ -390,6 +423,12 @@ class SyncedProfileLockStore extends ProfileLockStore {
     if (_checkOwner() == null) {
       throw const ProfileLockException('sign_in_required');
     }
+    if (!cloudConfigured) {
+      await _authorizeLocalChange(profileId, pin);
+      await super.clear(profileId);
+      lockEntry(profileId);
+      return;
+    }
     await _request('remove', profileId: profileId, pin: pin);
     _grants.remove(profileId);
     _versions.remove(profileId);
@@ -397,6 +436,19 @@ class SyncedProfileLockStore extends ProfileLockStore {
     await _cacheStatus(profileId, {'locked': false});
     await _secure.delete(key: _key('device', profileId));
     await super.clear(profileId);
+  }
+
+  Future<void> _authorizeLocalChange(String profileId, String? pin) async {
+    final owner = _checkOwner();
+    if ((await _entryStatus(profileId))['locked'] == true) {
+      throw const ProfileLockException('online_required');
+    }
+    if (await isLocked(profileId) && !await verify(profileId, pin ?? '')) {
+      throw const ProfileLockException('verification_failed');
+    }
+    if (_checkOwner() != owner) {
+      throw const ProfileLockException('session_changed');
+    }
   }
 
   @override
@@ -435,7 +487,7 @@ class SyncedProfileLockStore extends ProfileLockStore {
 
   @override
   Future<bool> biometricEnabled(String profileId) async {
-    if (_checkOwner() == null) return false;
+    if (!cloudConfigured || _checkOwner() == null) return false;
     final device = await _read(_key('device', profileId));
     return device?['token'] is String &&
         (!_versions.containsKey(profileId) ||
@@ -608,8 +660,11 @@ class SyncedProfileLockStore extends ProfileLockStore {
       if (prefix == null || !entry.key.startsWith(prefix)) {
         throw const ProfileLockException('backup_other_account');
       }
+      if (!cloudConfigured && value['locked'] == true) {
+        throw const ProfileLockException('profile_locked');
+      }
     }
-    if (owner == null) return;
+    if (owner == null || !cloudConfigured) return;
     final status = await _request('status');
     final profiles = status['profiles'];
     if (profiles is! List) {

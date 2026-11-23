@@ -12,6 +12,7 @@ import '../repository/catalogue_repository.dart';
 import '../repository/catalogue_router.dart';
 import '../repository/source_repository.dart';
 import 'anilist_catalogue.dart';
+import 'automatic_fallbacks.dart';
 import 'mal_catalogue.dart';
 import 'simkl_catalogue.dart';
 import 'metadata_provider_prefs.dart';
@@ -57,7 +58,10 @@ Future<void> registerZangetsuMode(GetIt sl) async {
       store: matchStore,
       prefs: sourcePrefs,
       candidates: orderedCandidates,
-      sweepCandidates: sweepList,
+      sweepCandidates: (kind) => kind == ZKind.manga || kind == ZKind.novel
+          ? sweepList(kind)
+          : sweepCandidates(kind),
+      videoSearchConcurrency: 4,
     ),
   );
 
@@ -282,7 +286,12 @@ List<({String id, String name})> orderedCandidates(ZKind kind) {
 List<({String id, String name})> sweepList(ZKind kind) {
   final all = sweepCandidates(kind);
   final cap = sl<SourceOrderPrefs>().cap(kind);
-  return cap == SourceOrderPrefs.allSourcesCap ? all : all.take(cap).toList();
+  final capped = cap == SourceOrderPrefs.allSourcesCap
+      ? all
+      : all.take(cap).toList();
+  // The fallback is appended AFTER the cap, so a "top 3" setting still means
+  // the user's top 3; FrameXTV is only tried when none of those played.
+  return withAutomaticFallbacks(capped, kind);
 }
 
 /// [sweepList] without the cap: every source the sweep is willing to walk, in
@@ -315,7 +324,10 @@ List<({String id, String name})> sweepCandidates(ZKind kind) {
   // the given order, everything else after in its incoming relative order —
   // and that incoming order is now the ranking.
   final ranked = rankByRecord(narrowed, sourceRecordOf);
-  return applySourceOrder(ranked, sl<SourceOrderPrefs>().get(kind));
+  return withAutomaticFallbacks(
+    applySourceOrder(ranked, sl<SourceOrderPrefs>().get(kind)),
+    kind,
+  );
 }
 
 /// What the ranker knows about one source: how often it has actually played,

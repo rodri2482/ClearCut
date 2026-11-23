@@ -29,6 +29,7 @@ import '../playback/source_health_store.dart';
 import '../search/local_title_index.dart';
 import 'host_mirrors.dart';
 import '../provider/base_provider.dart';
+import '../provider/bundled_sources.dart';
 import '../i18n/source_languages.dart';
 import '../prefs/source_lang_prefs.dart';
 import '../provider/cf_solve_needed.dart';
@@ -220,11 +221,7 @@ class SourceRepository implements CatalogueRepository, InstantSearchSource {
     required Iterable<String> sourceIds,
     int limit = 24,
   }) {
-    return _titleIndex?.search(
-          query,
-          sourceIds: sourceIds,
-          limit: limit,
-        ) ??
+    return _titleIndex?.search(query, sourceIds: sourceIds, limit: limit) ??
         const <MediaItem>[];
   }
 
@@ -1116,24 +1113,26 @@ class SourceRepository implements CatalogueRepository, InstantSearchSource {
   /// resolve keeps running, so mirrors needing an extra round-trip land shortly
   /// afterwards. This reads that growing set without starting any work.
   ///
-  /// CloudStream sources only — every other provider resolves in one shot, so
-  /// there is nothing to poll. Those (and any failure) report `done: true` with
-  /// no sources, which tells a caller to simply stop asking.
+  /// FrameXTV fetches additional mirrors on demand. Other providers without
+  /// incremental results report `done: true` with no sources.
   @override
   Future<({List<VideoSource> sources, bool done})> polledSources(
     String episodeUrl, {
     String? sourceId,
   }) async {
     final provider = _providerFor(sourceId);
-    if (provider is! CloudStreamProvider) {
-      return (sources: const <VideoSource>[], done: true);
-    }
     try {
-      return await provider.pollVideoSources(episodeUrl);
-    } catch (_) {
-      // Never surfaced: the caller already has a playable list.
-      return (sources: const <VideoSource>[], done: true);
-    }
+      if (provider is CloudStreamProvider) {
+        return await provider.pollVideoSources(episodeUrl);
+      }
+      if (provider is JsProvider && provider.sourceId == frameXtvSourceId) {
+        return (
+          sources: await provider.getVideoSources(episodeUrl),
+          done: true,
+        );
+      }
+    } catch (_) {}
+    return (sources: const <VideoSource>[], done: true);
   }
 
   /// Resolve playable sources. [fast] (playback) returns as soon as the first

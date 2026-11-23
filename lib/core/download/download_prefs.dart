@@ -12,8 +12,7 @@ String downloadDestinationLabel({
   required bool keepPrivate,
   required String? locationLabel,
   required String publicFallback,
-}) =>
-    keepPrivate ? 'Private (app storage)' : (locationLabel ?? publicFallback);
+}) => keepPrivate ? 'Private (app storage)' : (locationLabel ?? publicFallback);
 
 /// Persists the user's chosen download folder (a SAF tree URI) for MP4
 /// downloads. Null = the default Downloads/Zangetsu location.
@@ -50,8 +49,7 @@ class DownloadPrefs {
   ///
   /// Off by default: files in the private directory are invisible to every
   /// file manager and are deleted when the app is uninstalled.
-  bool get keepPrivate =>
-      _box.get('keepPrivate', defaultValue: false) as bool;
+  bool get keepPrivate => _box.get('keepPrivate', defaultValue: false) as bool;
 
   Future<void> setKeepPrivate(bool value) => _box.put('keepPrivate', value);
 
@@ -62,6 +60,7 @@ class DownloadPrefs {
   static const int parallelMax = 10;
   static const int connectionsMin = 1;
   static const int connectionsMax = 8;
+  static const int defaultConnections = 6;
 
   /// How many different episodes download at the same time. Default 3.
   int get parallelDownloads =>
@@ -70,9 +69,12 @@ class DownloadPrefs {
   Future<void> setParallelDownloads(int n) =>
       _box.put('parallel', n.clamp(parallelMin, parallelMax));
 
-  /// How many segment connections a single HLS download uses. Default 4.
+  /// How many segment connections a single HLS download uses.
   int get connectionsPerDownload =>
-      (_box.get('connections') as int? ?? 4).clamp(connectionsMin, connectionsMax);
+      (_box.get('connections') as int? ?? defaultConnections).clamp(
+        connectionsMin,
+        connectionsMax,
+      );
 
   Future<void> setConnectionsPerDownload(int n) =>
       _box.put('connections', n.clamp(connectionsMin, connectionsMax));

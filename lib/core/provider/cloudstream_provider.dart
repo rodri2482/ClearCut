@@ -200,8 +200,7 @@ class CloudStreamProvider implements BaseProvider {
   /// ambiguous — we send `"<fileId><name>"` and the host matches BOTH,
   /// landing on the exact source. Sources with no file id (unique `cs:<name>`
   /// sources) fall back to the bare name, which the host still accepts.
-  String get hostKey =>
-      (sourcePlugin != null && sourcePlugin!.isNotEmpty)
+  String get hostKey => (sourcePlugin != null && sourcePlugin!.isNotEmpty)
       ? '${sourcePlugin!}$keySep$name'
       : name;
 
@@ -483,10 +482,10 @@ class CloudStreamProvider implements BaseProvider {
       final sep = key.indexOf('|');
       if (sep <= 0) continue;
       try {
-        await _csChannel.invokeMethod(
-          'cancelLinks',
-          {'name': key.substring(0, sep), 'data': key.substring(sep + 1)},
-        );
+        await _csChannel.invokeMethod('cancelLinks', {
+          'name': key.substring(0, sep),
+          'data': key.substring(sep + 1),
+        });
       } catch (_) {
         // Best-effort: a failed cancel just lets that hunt run its cap out.
       }
@@ -736,6 +735,11 @@ class CloudStreamProvider implements BaseProvider {
       coverHeaders: coverHeaders,
       url: url,
       type: itemType(m['type'] as String?),
+      isTvListing: switch (m['type']) {
+        'TvSeries' || 'AsianDrama' => true,
+        'Movie' || 'AnimeMovie' => false,
+        _ => null,
+      },
       sourceId: sourceId,
       // Only CloudStream reports this, and plenty of its providers don't set
       // it either — null just means no badge.

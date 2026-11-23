@@ -61,6 +61,7 @@ import '../provider/cloudstream_provider.dart';
 import '../provider/provider_downloader.dart';
 import '../provider/provider_manager.dart';
 import '../share/open_link_service.dart';
+import '../provider/bundled_sources.dart';
 import '../provider/provider_registry.dart';
 import '../provider/provider_repo_registry.dart';
 import '../repository/catalogue_repository.dart';
@@ -277,18 +278,23 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
         )
       : sl<SupabaseService>().currentUserId();
 
-  // Supabase issues auth tokens; cloud data requests use the VPS client.
-  final endpoint = Uri.tryParse(Environment.vpsSyncUrl);
+  // Supabase is the backend of record; VPS_SYNC_URL can still override it.
+  final endpoint = Uri.tryParse(Environment.cloudSyncUrl);
   if (endpoint == null ||
       endpoint.scheme != 'https' ||
       endpoint.host.isEmpty ||
       endpoint.userInfo.isNotEmpty ||
       endpoint.hasQuery ||
       endpoint.hasFragment) {
-    throw StateError('VPS_SYNC_URL must be a valid HTTPS sync endpoint');
+    throw StateError('The cloud sync endpoint must be a valid HTTPS URL');
   }
   final vpsClient = PostgrestClient(
-    endpoint.toString().replaceFirst(RegExp(r'/$'), ''),
+    Environment.cloudRestUrl.replaceFirst(RegExp(r'/$'), ''),
+    // Supabase's PostgREST requires the project key on every request; the
+    // per-user Authorization header is added by CloudPostgrest.setAuth.
+    headers: Environment.usingSupabaseForData
+        ? {'apikey': Environment.supabaseAnonKey}
+        : const {},
   );
   String? cloudAccessToken() =>
       sl<SupabaseService>().client.auth.currentSession?.accessToken;
@@ -297,11 +303,13 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   await ViewerProfileStore.init();
   sl.registerSingleton<ViewerProfileStore>(
     ViewerProfileStore(
-      remote: ViewerProfileRemote(
-        sl<SupabaseService>(),
-        vpsClient: vpsClient,
-        accessToken: cloudAccessToken,
-      ),
+      remote: Environment.cloudSyncConfigured
+          ? ViewerProfileRemote(
+              sl<SupabaseService>(),
+              vpsClient: vpsClient,
+              accessToken: cloudAccessToken,
+            )
+          : null,
       currentUserId: currentUserId,
       onProfileDataDeleted: (owner, id) =>
           sl<ProfileLockStore>().forgetDeletedProfile(owner, id),
@@ -309,7 +317,7 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
         final token =
             sl<SupabaseService>().client.auth.currentSession?.accessToken;
         if (token == null) return false;
-        return ProfileAvatarUploader(sl<Dio>()).delete(url: url, token: token);
+        return sl<ProfileAvatarUploader>().delete(url: url, token: token);
       },
     ),
   );
@@ -317,6 +325,7 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
     SyncedProfileLockStore(
       remote: PostgrestProfileLockRemote(vpsClient, cloudAccessToken),
       currentUserId: currentUserId,
+      cloudConfigured: Environment.cloudSyncConfigured,
       isOffline: isOffline,
       onGrantsChanged: (grants) {
         if (grants.isEmpty) {
@@ -555,6 +564,12 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   dio.interceptors.add(aniListPolicy);
   sl.registerSingleton<AniListNetworkPolicy>(aniListPolicy);
   sl.registerSingleton<Dio>(dio);
+  sl.registerLazySingleton<ProfileAvatarUploader>(
+    () => ProfileAvatarUploader(
+      sl<Dio>(),
+      currentUserId: sl<SupabaseService>().currentUserId,
+    ),
+  );
   // Sends the diagnostic log when someone taps Settings → Share logs. Falls
   // back to the share sheet when no intake URL is configured, so it is safe to
   // register in every build.
@@ -907,45 +922,15 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
     await manager.loadExtractor(extractorId: ex, jsSource: js);
   }
 
-  // The app ships with NO built-in providers — every source comes from a repo
-  // (the ClearCut repo is installed on first launch via onboarding). Drop any
-  // legacy `bundled://` entries left by older installs, then load the
-  // repo-installed providers persisted from previous launches.
-  await registry.purgeBundled();
-  // ClearCut built-in sources: free, legal content that works out of the box.
-  // Re-seeded every launch (purgeBundled above clears bundled entries), and a
-  // failure here never blocks boot — the app simply starts without them.
-  // Each one is loaded on its own so one failing source never hides the rest.
-  for (final builtin in const [
-    ('clearcut_archive', 'archive_films.js', 'Internet Archive (free films)'),
-    ('clearcut_nasa', 'nasa_video.js', 'NASA (free space videos)'),
-    (
-      'clearcut_wikimedia',
-      'wikimedia_video.js',
-      'Wikimedia Commons (free films)',
-    ),
-    ('clearcut_blender', 'blender_movies.js', 'Blender Open Movies'),
-    (
-      'clearcut_prelinger',
-      'prelinger_films.js',
-      'Prelinger Archives (free film)',
-    ),
-    ('clearcut_peertube', 'peertube_video.js', 'PeerTube (free public video)'),
-    ('clearcut_openverse', 'openverse_audio.js', 'Openverse (free music)'),
-    // Kept active at the user's explicit request. ClearCut does not modify or
-    // reverse-engineer this source's API; it is bundled as supplied.
-    ('clearcut_framextv', 'framextv.js', 'FrameXTV'),
-  ]) {
+  await registry.purgeBundled(
+    keep: bundledSources.map((source) => source.id).toSet(),
+  );
+  for (final source in bundledSources) {
+    if (source.optional && !source.isInstalled(registry)) continue;
     try {
-      await registry.installFromBundled(
-        name: builtin.$1,
-        jsSource: await rootBundle.loadString(
-          'assets/builtin_sources/${builtin.$2}',
-        ),
-        displayName: builtin.$3,
-      );
-    } catch (e) {
-      debugPrint('[builtin] ${builtin.$3} failed to load: $e');
+      await source.install(registry);
+    } catch (error) {
+      debugPrint('[builtin] ${source.name} failed to load: $error');
     }
   }
   // Load repo-installed JS providers into the runtime. Bounded so a provider

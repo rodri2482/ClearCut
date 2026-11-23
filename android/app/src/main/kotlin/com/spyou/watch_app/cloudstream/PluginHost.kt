@@ -122,17 +122,25 @@ class PluginHost(private val context: Context) {
         response
     }
 
+    private val extensionContext = object : android.content.ContextWrapper(context) {
+        override fun getApplicationContext(): Context = this
+        override fun startActivity(intent: android.content.Intent) = Unit
+        override fun startActivity(intent: android.content.Intent, options: android.os.Bundle?) = Unit
+        override fun startActivities(intents: Array<out android.content.Intent>) = Unit
+        override fun startActivities(intents: Array<out android.content.Intent>, options: android.os.Bundle?) = Unit
+    }
+
     init {
         INSTANCE = this
         // Plugins reach for the global app context via CloudStreamApp; set it
         // before any plugin loads so requiresResources/settings plugins work.
-        com.lagradost.cloudstream3.CloudStreamApp.setContext(context)
+        com.lagradost.cloudstream3.CloudStreamApp.setContext(extensionContext)
         // Also feed the library's ContextHelper (com.lagradost.api.getContext),
         // which WebViewResolver reads. Without it, WebView-based extractors
         // (FaselHD, …) throw "No base context in WebViewResolver" and resolve no
         // links. Additive: it was unset (null) before, so this only enables a
         // path that previously crashed — never changes a working one.
-        com.lagradost.api.setContext(java.lang.ref.WeakReference<Any>(context))
+        com.lagradost.api.setContext(java.lang.ref.WeakReference<Any>(extensionContext))
 
         // Tell plugins what kind of device this actually is. They gate real work
         // on it, not just cosmetics: CNC Verse's openInExternalBrowser (the
@@ -187,20 +195,6 @@ class PluginHost(private val context: Context) {
         applyBaseClient()
     }
 
-    /** PathClassLoader → manifest.json → instantiate → load(). Returns success. */
-    // Files that hard-failed load ONLY because the plugin cast the load context to
-    // an AppCompatActivity (our host is a FlutterActivity). They can be retried
-    // against a real AppCompatActivity via CsPluginLoaderActivity — see
-    // [pendingActivityLoads]. Additive: the normal load path is unchanged.
-    private val needsActivityLoad =
-        java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
-    /** Paths that failed on the AppCompatActivity cast and can be retried against
-     *  a real activity. Returned + cleared (the caller drives the retry). */
-    fun pendingActivityLoads(): List<String> = synchronized(needsActivityLoad) {
-        needsActivityLoad.toList().also { needsActivityLoad.clear() }
-    }
-
     /** True once [file]'s plugin has loaded (registered its source) — used to
      *  confirm an activity-context retry actually took. */
     fun isLoaded(file: File): Boolean = loaded.contains(file.absolutePath)
@@ -229,23 +223,7 @@ class PluginHost(private val context: Context) {
      *   passes itself (an AppCompatActivity) to satisfy plugins that cast the load
      *   context — the classloader parent stays the app either way.
      */
-    /** The Context a plugin is loaded with — the live foreground Activity when
-     *  there is one, else the application context.
-     *
-     *  This matters long after loading: a plugin keeps whatever it is handed in
-     *  `load()` and shows its own dialogs on it later (CNC Verse's Cloudflare
-     *  screen, its subscription and Telegram popups). The application context
-     *  cannot host a dialog at all, and the throwaway AppCompatActivity we used
-     *  to fall back to had already finished by then — either way the dialog died
-     *  on BadTokenException, the plugin swallowed it, and the source quietly
-     *  served a placeholder stream instead of the real one.
-     *
-     *  Background loads (SubscriptionWorker) have no activity and fall back to
-     *  the application context, exactly as before — nothing can show UI there. */
-    private fun loadContext(): Context =
-        com.spyou.watch_app.MainActivity.current?.get() ?: context
-
-    fun loadPlugin(file: File, loadCtx: Context = loadContext()): Boolean {
+    fun loadPlugin(file: File, loadCtx: Context = extensionContext): Boolean {
         if (loaded.contains(file.absolutePath)) return true
         return try {
             // Android 8+ refuses to load a dex/.cs3 the app can WRITE to (W^X
@@ -320,13 +298,6 @@ class PluginHost(private val context: Context) {
             }
             true
         } catch (t: Throwable) {
-            // Plugin cast the load context to an AppCompatActivity (we passed the
-            // Application). Flag it for a retry against a real activity — but only
-            // when THIS was the default app-context load, so the retry itself (which
-            // passes an activity) doesn't re-flag on some later failure.
-            if (loadCtx === context && t.message?.contains("AppCompatActivity") == true) {
-                needsActivityLoad.add(file.absolutePath)
-            }
             Log.w(TAG, "loadPlugin failed for ${file.name}: ${t.message}")
             false
         }
@@ -354,7 +325,7 @@ class PluginHost(private val context: Context) {
     //   1. "<fileId>\u0001<name>" — the bundle-safe key. One `.cs3` can register
     //      MANY sources under ONE file id (e.g. CNC Verse → Netflix, Disney, …),
     //      so the file id alone is ambiguous; match BOTH to land on the exact
-    //      source. Falls back to name-only, then file-id-only.
+    //      source. A stale composite key must never resolve to a different API.
     //   2. bare "<fileId>" — a unique file id (disambiguated same-named forks).
     //   3. bare "<name>" — legacy callers; name match.
     private fun apiByName(key: String): MainAPI? {
@@ -365,11 +336,10 @@ class PluginHost(private val context: Context) {
             return APIHolder.allProviders.firstOrNull {
                 it.sourcePlugin == sp && it.name == nm
             }
-                ?: APIHolder.allProviders.firstOrNull { it.name == nm }
-                ?: APIHolder.allProviders.firstOrNull { it.sourcePlugin == sp }
         }
-        return APIHolder.allProviders.firstOrNull { it.sourcePlugin == key }
-            ?: APIHolder.allProviders.firstOrNull { it.name == key }
+        return APIHolder.allProviders.filter {
+            it.sourcePlugin == key || it.name == key
+        }.singleOrNull()
     }
 
     /** The plugin that registered the source [apiName], if it's one we track. */

@@ -99,7 +99,7 @@ class EpisodeAnchorStore {
   static const int maxEntries = 600;
 
   static String _key(String zmEpisodeUrl, String category) =>
-      '$zmEpisodeUrl|$category';
+      '$zmEpisodeUrl|$category${zmEpisodeUrl.startsWith('zm://tv/') || zmEpisodeUrl.startsWith('zm://movie/') || zmEpisodeUrl.startsWith('zm://anime/') ? '|2' : ''}';
 
   EpisodeAnchor? get(String zmEpisodeUrl, String category) {
     final key = _key(zmEpisodeUrl, category);

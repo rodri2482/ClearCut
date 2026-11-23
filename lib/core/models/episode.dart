@@ -3,6 +3,33 @@ import 'package:json_annotation/json_annotation.dart';
 
 part 'episode.g.dart';
 
+final _tvEpisodeLabel = RegExp(
+  r'\bS(?:eason\s*)?(\d+)\s*[·:_-]?\s*E(?:p(?:isode)?\s*)?(\d+)\b',
+  caseSensitive: false,
+);
+
+/// Extracts explicit season and episode numbers before using a source's
+/// numeric fields. The catalogue can use an absolute number alongside S2E1.
+({int season, int number})? tvEpisodeCoordinates(Episode episode) {
+  final match =
+      _tvEpisodeLabel.firstMatch(episode.title) ??
+      _tvEpisodeLabel.firstMatch(episode.id);
+  if (match != null) {
+    return (
+      season: int.parse(match.group(1)!),
+      number: int.parse(match.group(2)!),
+    );
+  }
+  final season = episode.season;
+  final number = episode.number;
+  return season != null &&
+          number != null &&
+          number.isFinite &&
+          number == number.truncateToDouble()
+      ? (season: season, number: number.toInt())
+      : null;
+}
+
 /// A scanlation group name fit to show, or null when there isn't really one.
 ///
 /// Sources don't reliably use an empty string for "no group": one Mihon source
@@ -125,39 +152,39 @@ class Episode extends Equatable {
     int? season,
     String? unavailable,
   }) => Episode(
-        id: id,
-        title: title ?? this.title,
-        number: number,
-        url: url,
-        date: date ?? this.date,
-        thumbnail: thumbnail ?? this.thumbnail,
-        filler: filler,
-        season: season ?? this.season,
-        scanlator: scanlator,
-        description: description ?? this.description,
-        metaTitle: metaTitle ?? this.metaTitle,
-        rating: rating ?? this.rating,
-        runtimeMinutes: runtimeMinutes ?? this.runtimeMinutes,
-        unavailable: unavailable ?? this.unavailable,
-      );
+    id: id,
+    title: title ?? this.title,
+    number: number,
+    url: url,
+    date: date ?? this.date,
+    thumbnail: thumbnail ?? this.thumbnail,
+    filler: filler,
+    season: season ?? this.season,
+    scanlator: scanlator,
+    description: description ?? this.description,
+    metaTitle: metaTitle ?? this.metaTitle,
+    rating: rating ?? this.rating,
+    runtimeMinutes: runtimeMinutes ?? this.runtimeMinutes,
+    unavailable: unavailable ?? this.unavailable,
+  );
 
   @override
   List<Object?> get props => [
-        id,
-        title,
-        number,
-        url,
-        date,
-        thumbnail,
-        filler,
-        season,
-        scanlator,
-        description,
-        metaTitle,
-        rating,
-        runtimeMinutes,
-        unavailable,
-      ];
+    id,
+    title,
+    number,
+    url,
+    date,
+    thumbnail,
+    filler,
+    season,
+    scanlator,
+    description,
+    metaTitle,
+    rating,
+    runtimeMinutes,
+    unavailable,
+  ];
 }
 
 /// Where [ep] sits inside its OWN season, 1-based — or null when that can't be

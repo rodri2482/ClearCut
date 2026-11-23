@@ -2,21 +2,16 @@ import '../environment.dart';
 import '../models/media_item.dart';
 import '../models/provider_info.dart';
 
-/// Encodes a [MediaItem] into a short shareable web link and decodes an incoming
-/// `zangetsu://open?…` deep link back into a [MediaItem].
-///
-/// The shared link is an HTTPS URL to the site's `/open/` page:
-///   `https://…/Zangetsu-Site/open/?s=<source>&u=<url>&t=<title>&y=<a|m>&c=<cover>`
-/// Only the fields needed to re-open the title are carried — the Detail
-/// re-fetches everything else — which keeps the link short. When installed, the
-/// app catches it via `zangetsu://open?…`; otherwise the page offers the app.
+/// Encodes the title identity for ClearCut's share and app links.
 class ShareLink {
   const ShareLink._();
 
-  /// The short web link to share for [item].
   static String forItem(MediaItem item) {
     final cover = item.cover;
-    return Uri.parse(Environment.siteOpenUrl)
+    final base =
+        Environment.siteOpenUri ??
+        Uri(scheme: Environment.openLinkScheme, host: Environment.openLinkHost);
+    return base
         .replace(
           queryParameters: {
             's': item.sourceId,
@@ -56,6 +51,9 @@ class ShareLink {
     String? cover,
     String? savedFrom,
   }) {
+    // A site URL is optional. Without one [forItem] emits a `clearcut://open`
+    // link that still opens the app on a device with ClearCut installed, so
+    // requiring a site URL here only disabled the Discord button entirely.
     if (sourceId.isEmpty || url == null || url.isEmpty) return null;
     return forItem(
       MediaItem(
@@ -70,11 +68,21 @@ class ShareLink {
     );
   }
 
-  /// Parse a `zangetsu://open?s=…&u=…` deep link into a [MediaItem], or null
+  /// Parse a `clearcut://open?s=…&u=…` deep link into a [MediaItem], or null
   /// when [uri] is not an open-link or is missing the source/url.
   static MediaItem? parse(Uri uri) {
-    if (uri.scheme != Environment.openLinkScheme ||
-        uri.host != Environment.openLinkHost) {
+    final site = Environment.siteOpenUri;
+    final native =
+        (uri.scheme == Environment.openLinkScheme ||
+            uri.scheme == Environment.trackerRedirectScheme) &&
+        uri.host == Environment.openLinkHost;
+    final web =
+        site != null &&
+        uri.scheme == site.scheme &&
+        uri.origin == site.origin &&
+        uri.path.replaceFirst(RegExp(r'/+$'), '') ==
+            site.path.replaceFirst(RegExp(r'/+$'), '');
+    if (!native && !web) {
       return null;
     }
     final q = uri.queryParameters;

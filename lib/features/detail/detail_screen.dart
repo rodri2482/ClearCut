@@ -571,6 +571,10 @@ class _DetailViewState extends State<_DetailView>
   }
 
   void _resolveAgeRating(MediaDetail detail) {
+    // The rating is cosmetic. A build that did not register the metadata
+    // service (or a test harness with a minimal container) must not have its
+    // detail screen crash just because the badge cannot be fetched.
+    if (!sl.isRegistered<AgeRatingService>()) return;
     _ageFuture ??= sl<AgeRatingService>().label(
       title: detail.title,
       englishTitle: detail.englishTitle,
@@ -742,11 +746,10 @@ class _DetailViewState extends State<_DetailView>
       () {
         if (!mounted) return;
         if (zMode) {
-          final matched = _zModeMatchedSource();
           ProviderManager.inBackground(
             () => sl<CatalogueRepository>().sources(
               epUrl,
-              sourceId: matched?.sourceId ?? sourceId,
+              sourceId: sourceId,
               fast: true,
             ),
           ).catchError((_) => <VideoSource>[]);
@@ -1318,7 +1321,7 @@ class _DetailViewState extends State<_DetailView>
         // Same sheet the "not on <source>" row opens, reachable for ANY
         // episode: knowing which of your sources carries an episode is useful
         // long before one of them comes up short.
-        if (!await _sweepForEpisode(ep)) return;
+        if (!await _sweepForEpisode(ep, category)) return;
         if (!mounted) return;
         await _openPlayer(episodes, index, detail, category);
 
@@ -1559,15 +1562,23 @@ class _DetailViewState extends State<_DetailView>
       );
       return;
     }
-    // The catalogue lists this episode but the one source we checked stops
-    // short of it (see [Episode.unavailable]). Say which source, and let the
-    // viewer decide whether to spend the sweep — asking every installed
-    // source in turn is what measured 23 seconds of frozen UI, so it is
-    // offered rather than imposed. Falling through means they asked for it.
-    //
-    // Every play path funnels through this method, so this one check covers
-    // the row tap, the grid tile, the Play button and resume.
-    if (index >= 0 && index < episodes.length && !episodes[index].available) {
+    // A source-specific shortage is not a global miss in automatic video
+    // mode. Let the player check the alternate sources for that episode.
+    final candidate = index >= 0 && index < episodes.length
+        ? episodes[index]
+        : null;
+    final canonical = candidate == null
+        ? null
+        : ZmodeIds.parseEpisode(candidate.url)?.show;
+    final automaticVideo =
+        canonical != null &&
+        canonical.kind != ZKind.manga &&
+        canonical.kind != ZKind.novel &&
+        sl<SourceMatcher>().sourceForTitle(canonical) == null;
+    final missing = candidate?.unavailable;
+    if (missing != null &&
+        !(automaticVideo &&
+            (missing.startsWith('Not on ') || missing == 'Not available'))) {
       final sweep = await showEpisodeUnavailable(
         context,
         episodes[index],
@@ -1580,7 +1591,7 @@ class _DetailViewState extends State<_DetailView>
       // the player and letting it find out. Falling through only happens once
       // something playable is known to exist — and the resolver caches that
       // winner, so the player then opens straight onto it.
-      if (!await _sweepForEpisode(episodes[index])) return;
+      if (!await _sweepForEpisode(episodes[index], category)) return;
       if (!mounted) return;
     }
 
@@ -1690,17 +1701,6 @@ class _DetailViewState extends State<_DetailView>
     }
     if (!mounted) return;
 
-    // Hand the exact source Auto Resolve just found to the player. Going
-    // through the normal `zm` router would make the player match the title
-    // again and could land on a different, older guess for the same show.
-    // An adult source is never followed automatically — the viewer must
-    // pick it explicitly for this title. Without this, a cached auto-match
-    // from an NSFW source was handed straight to the player.
-    final matched = _zModeMatchedSource();
-    final playSourceId =
-        matched != null && !isAutoResolveBlocked(matched.sourceId)
-        ? matched.sourceId
-        : widget.item.sourceId;
     Navigator.of(context)
         .push(
           episodePlayerRoute(
@@ -1722,7 +1722,7 @@ class _DetailViewState extends State<_DetailView>
               resume: sl<ResumeStore>(),
               resolveSources: (u) => sl<CatalogueRepository>().sources(
                 u,
-                sourceId: playSourceId,
+                sourceId: widget.item.sourceId,
                 fast: true,
               ),
               // The resolve above returns on the first usable link so playback
@@ -1730,7 +1730,7 @@ class _DetailViewState extends State<_DetailView>
               // lets the Sources sheet pick them up once they land.
               pollSources: (u) => sl<CatalogueRepository>().polledSources(
                 u,
-                sourceId: playSourceId,
+                sourceId: widget.item.sourceId,
               ),
               history: sl<WatchHistory>(),
               showTitle: detail.title,
@@ -1769,12 +1769,16 @@ class _DetailViewState extends State<_DetailView>
   /// and if someone is going to wait they should see who is being asked, which
   /// sources have it, and get to take one — rather than watch a spinner and be
   /// handed whichever source happened to answer first.
-  Future<bool> _sweepForEpisode(Episode ep) async {
-    final picked = await showEpisodeSourcesSheet(context, episode: ep);
+  Future<bool> _sweepForEpisode(Episode ep, String category) async {
+    final picked = await showEpisodeSourcesSheet(
+      context,
+      episode: ep,
+      category: category,
+    );
     if (picked == null || !mounted) return false;
     // Hand the resolver the result the sheet already has, so opening the
     // player doesn't repeat the work the viewer just watched happen.
-    await sl<PlaybackResolver>().useProbed(ep.url, picked);
+    await sl<PlaybackResolver>().useProbed(ep.url, picked, category: category);
     return mounted;
   }
 
@@ -2832,6 +2836,10 @@ class _DetailViewState extends State<_DetailView>
                 child: sourceMetadataReady && ZmodeIds.isZ(widget.item.url)
                     ? MatchLine(
                         canonical: ZmodeIds.parseShow(widget.item.url)!,
+                        playbackEpisodeUrl: !isReading && eps.isNotEmpty
+                            ? eps[resumeIdx].url
+                            : null,
+                        playbackCategory: category,
                         title: detail.title,
                         altTitle: detail.englishTitle,
                         malId: detail.malId,

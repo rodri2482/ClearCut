@@ -6,15 +6,15 @@ import 'package:watch_app/core/supabase/auth_route.dart';
 void main() {
   const code = 'ABCD2345';
   const nonce = 'n_s3creTN0nceValue_________pad';
-  final site = Uri.parse(Environment.sitePairUrl);
+  final site = Environment.sitePairUri;
 
-  test('qrData is an http(s) URL so iPhone Camera treats it as a link', () {
+  test('qrData uses the configured website or the ClearCut app', () {
     final data = PairLink.qrData(code: code, nonce: nonce);
     final uri = Uri.parse(data);
 
-    expect(uri.scheme, anyOf('http', 'https'));
-    expect(uri.host, site.host);
-    expect(uri.path, site.path);
+    expect(uri.scheme, site?.scheme ?? 'clearcut');
+    expect(uri.host, site?.host ?? 'pair');
+    expect(uri.path, site?.path ?? '');
     expect(uri.queryParameters['code'], code);
     expect(uri.queryParameters['nonce'], nonce);
     expect(uri.queryParameters.containsKey('trackers'), isFalse);
@@ -24,13 +24,13 @@ void main() {
     final data = PairLink.qrData(code: code, trackers: true);
     final uri = Uri.parse(data);
 
-    expect(uri.scheme, anyOf('http', 'https'));
+    expect(uri.scheme, site?.scheme ?? 'clearcut');
     expect(uri.queryParameters['code'], code);
     expect(uri.queryParameters.containsKey('nonce'), isFalse);
     expect(uri.queryParameters['trackers'], '1');
   });
 
-  test('parse round-trips the QR URL and the zangetsu:// deep link', () {
+  test('parse round-trips the QR URL and the ClearCut deep link', () {
     final web = Uri.parse(PairLink.qrData(code: code, nonce: nonce));
     final fromWeb = PairLink.parse(web);
     expect(fromWeb, isNotNull);
@@ -41,7 +41,7 @@ void main() {
     final deep = Uri.parse(
       PairLink.deepLink(code: code, nonce: nonce, trackers: true),
     );
-    expect(deep.scheme, 'zangetsu');
+    expect(deep.scheme, 'clearcut');
     expect(deep.host, 'pair');
     final fromDeep = PairLink.parse(deep);
     expect(fromDeep, isNotNull);

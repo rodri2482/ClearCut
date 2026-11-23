@@ -40,13 +40,12 @@ class _FakeFetcher implements ProviderJsFetcher {
     required String name,
     required String url,
     bool force = false,
-  }) async =>
-      CachedProvider(
-        name: name,
-        jsCode: '// $name',
-        url: url,
-        fetchedAt: DateTime.now(),
-      );
+  }) async => CachedProvider(
+    name: name,
+    jsCode: '// $name',
+    url: url,
+    fetchedAt: DateTime.now(),
+  );
 
   @override
   Future<void> remove(String name) async {}
@@ -62,10 +61,7 @@ void main() {
     Hive.init(tempDir.path);
     await ProviderRegistry.init();
     manager = _FakeManager();
-    registry = ProviderRegistry(
-      downloader: _FakeFetcher(),
-      manager: manager,
-    );
+    registry = ProviderRegistry(downloader: _FakeFetcher(), manager: manager);
   });
 
   tearDown(() async {
@@ -107,26 +103,27 @@ void main() {
     expect(registry.entryFor('allanime')?.name, 'allanime');
   });
 
-  test('setEnabled(false) flips the flag and drops it from the runtime',
-      () async {
-    await registry.installFromBundled(
-      name: 'allanime',
-      jsSource: '// allanime js',
-    );
-    final key = ProviderRegistry.providerKey(kBundledRepoUrl, 'allanime');
+  test(
+    'setEnabled(false) flips the flag and drops it from the runtime',
+    () async {
+      await registry.installFromBundled(
+        name: 'allanime',
+        jsSource: '// allanime js',
+      );
+      final key = ProviderRegistry.providerKey(kBundledRepoUrl, 'allanime');
 
-    await registry.setEnabled(key, false);
-    expect(registry.getAll().single.enabled, isFalse);
-    expect(manager.loaded, isNot(contains('allanime')));
+      await registry.setEnabled(key, false);
+      expect(registry.getAll().single.enabled, isFalse);
+      expect(manager.loaded, isNot(contains('allanime')));
 
-    // Re-enabling reloads it from the cached bundled JS.
-    await registry.setEnabled(key, true);
-    expect(registry.getAll().single.enabled, isTrue);
-    expect(manager.loaded, contains('allanime'));
-  });
+      // Re-enabling reloads it from the cached bundled JS.
+      await registry.setEnabled(key, true);
+      expect(registry.getAll().single.enabled, isTrue);
+      expect(manager.loaded, contains('allanime'));
+    },
+  );
 
-  test('loadAll reloads enabled bundled entries from the cached JS',
-      () async {
+  test('loadAll reloads enabled bundled entries from the cached JS', () async {
     await registry.installFromBundled(name: 'allanime', jsSource: '// a');
     await registry.installFromBundled(name: 'netmirror_nf', jsSource: '// nm');
     manager.loaded.clear();
@@ -135,4 +132,30 @@ void main() {
     expect(loaded.length, 2);
     expect(manager.loaded, containsAll(['allanime', 'netmirror_nf']));
   });
+
+  test(
+    'refreshing shipped sources preserves a disabled source after restart',
+    () async {
+      const name = 'clearcut_framextv';
+      await registry.installFromBundled(name: name, jsSource: '// shipped');
+      await registry.installFromBundled(name: 'obsolete', jsSource: '// old');
+      await registry.setEnabled(
+        ProviderRegistry.providerKey(kBundledRepoUrl, name),
+        false,
+      );
+      final restartedManager = _FakeManager();
+      final restarted = ProviderRegistry(
+        downloader: _FakeFetcher(),
+        manager: restartedManager,
+      );
+
+      await restarted.purgeBundled(keep: {name});
+      await restarted.installFromBundled(name: name, jsSource: '// refreshed');
+      await restarted.loadAll();
+
+      expect(restarted.getAll().single.name, name);
+      expect(restarted.getAll().single.enabled, isFalse);
+      expect(restartedManager.loaded, isEmpty);
+    },
+  );
 }

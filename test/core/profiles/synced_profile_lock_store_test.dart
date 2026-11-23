@@ -157,17 +157,53 @@ void main() {
   late _Remote remote;
   late _Storage storage;
   late String? owner;
-  SyncedProfileLockStore create() => SyncedProfileLockStore(
-    remote: remote,
-    currentUserId: () => owner,
-    storage: storage,
-    biometrics: _Biometrics(),
-  );
+  SyncedProfileLockStore create({bool cloudConfigured = true}) =>
+      SyncedProfileLockStore(
+        remote: remote,
+        currentUserId: () => owner,
+        storage: storage,
+        biometrics: _Biometrics(),
+        cloudConfigured: cloudConfigured,
+      );
   setUp(() {
     remote = _Remote();
     storage = _Storage();
     owner = 'account-a';
   });
+
+  test(
+    'signed-in local profiles open and manage a device PIN without sync',
+    () async {
+      final locks = create(cloudConfigured: false);
+      expect(await locks.isLocked('private'), isFalse);
+      await locks.requireBackupAccess();
+      expect(await locks.setPin('private', '1234'), isTrue);
+      final restarted = create(cloudConfigured: false);
+      expect(await restarted.isLocked('private'), isTrue);
+      expect(await restarted.verify('private', '9999'), isFalse);
+      expect(await restarted.verify('private', '1234'), isTrue);
+      await expectLater(
+        restarted.clear('private', pin: '9999'),
+        throwsA(isA<ProfileLockException>()),
+      );
+      await restarted.clear('private', pin: '1234');
+      expect(await restarted.isLocked('private'), isFalse);
+      expect(remote.actions, isEmpty);
+    },
+  );
+
+  test(
+    'a cached server lock still enforces its PIN without a sync endpoint',
+    () async {
+      expect(await create().verify('private', '1234'), isTrue);
+      remote.actions.clear();
+      final locks = create(cloudConfigured: false);
+      expect(await locks.isLocked('private'), isTrue);
+      expect(await locks.verify('private', '9999'), isFalse);
+      expect(await locks.verify('private', '1234'), isTrue);
+      expect(remote.actions, isEmpty);
+    },
+  );
 
   test('a verified PIN unlocks cached data offline after restart', () async {
     final locks = create();

@@ -30,6 +30,7 @@ import 'episode_anchor_store.dart';
 import 'playback_resolver.dart';
 import 'source_matcher.dart';
 import 'source_score_store.dart';
+import 'stream_probe.dart';
 import 'tmdb_catalogue.dart';
 import 'zmode_ids.dart';
 import 'zmode_source_prefs.dart';
@@ -53,6 +54,7 @@ class MetadataRepository implements CatalogueRepository {
     MetadataProviderPrefs? providerPrefs,
     void Function(String message)? onProviderFallback,
     SourceHealthStore? health,
+    StreamProbe? streamProbe,
     List<({String id, String name})> Function(ZKind)? candidates,
 
     /// Free key-free TV metadata, used as the last stand-in when the chosen
@@ -72,6 +74,7 @@ class MetadataRepository implements CatalogueRepository {
        _matcher = matcher,
        _browseKind = browseKind,
        _playback = PlaybackResolver(
+         probe: streamProbe,
          matcher: matcher,
          sources: sources,
          store: matchStore,
@@ -108,6 +111,7 @@ class MetadataRepository implements CatalogueRepository {
   void _bindPlayback() {
     _playback.bindTitleLookup(titleFor);
     _playback.bindAliasLookup(aliasesFor);
+    _playback.bindTvEpisodeLookup(_tvEpisodeFor);
   }
 
   final AniListCatalogue _al;
@@ -193,6 +197,29 @@ class MetadataRepository implements CatalogueRepository {
   /// screen had these but playback threw them away, so a source listing a film
   /// under its English theatrical title could never be found.
   final _aliases = <String, List<String>>{};
+  final _tvCatalogueEpisodes = <ZCanonical, List<Episode>>{};
+  final _tvEpisodeRequests = <ZCanonical, Future<List<Episode>>>{};
+
+  Future<({int season, int number})?> _tvEpisodeFor(
+    ZCanonical show,
+    int index,
+  ) async {
+    var episodes = _tvCatalogueEpisodes[show];
+    if (episodes == null) {
+      final request = _tvEpisodeRequests.putIfAbsent(show, () async {
+        try {
+          final detail = await _viaVideo((catalogue) => catalogue.detail(show));
+          return _tvCatalogueEpisodes[show] = detail.episodes;
+        } finally {
+          _tvEpisodeRequests.remove(show);
+        }
+      });
+      episodes = await request;
+    }
+    return index > 0 && index <= episodes.length
+        ? tvEpisodeCoordinates(episodes[index - 1])
+        : null;
+  }
 
   /// The sub/dub cut each show was last opened as, by canonical key.
   ///
@@ -791,6 +818,9 @@ class MetadataRepository implements CatalogueRepository {
     ];
     _titles[c.key] = (title: d.title, alt: d.englishTitle, malId: d.malId);
     _aliases[c.key] = metadataAliases;
+    if (c.kind == ZKind.tv && d.episodes.isNotEmpty) {
+      _tvCatalogueEpisodes[c] = d.episodes;
+    }
     AppLogger.instance.log(
       '[metadata] detail catalogue title="${d.title}" eps=${d.episodes.length} '
       '${sw.elapsedMilliseconds}ms',
@@ -935,6 +965,12 @@ class MetadataRepository implements CatalogueRepository {
     // the catalogue's list out from under the screen.
     if (srcEpisodes.isEmpty) {
       return d;
+    }
+    if (c.kind == ZKind.tv && d.episodes.isNotEmpty) {
+      return d.copyWith(
+        subCount: srcDetail.subCount,
+        dubCount: srcDetail.dubCount,
+      );
     }
     // Union, longest wins: the SOURCE decides what plays, the CATALOGUE
     // decides what exists AND how episodes are labelled. Display (title,
@@ -1149,6 +1185,7 @@ class MetadataRepository implements CatalogueRepository {
         : await _viaAnime((x) => x.detail(c));
     t = (title: d.title, alt: d.englishTitle, malId: d.malId);
     _titles[c.key] = t;
+    if (c.kind == ZKind.tv) _tvCatalogueEpisodes[c] = d.episodes;
     return t;
   }
 

@@ -26,7 +26,6 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.spyou.watch_app.aniyomi.AniyomiBridge
 import com.spyou.watch_app.cast.CastManager
-import com.spyou.watch_app.cloudstream.CsPluginLoaderActivity
 import com.spyou.watch_app.cloudstream.PluginHost
 import com.spyou.watch_app.cloudstream.RepoManager
 import com.spyou.watch_app.cloudstream.SubscriptionWorker
@@ -55,22 +54,7 @@ import java.util.concurrent.Executors
 /// player, no video surface: just URL + time -> JPEG bytes.
 class MainActivity : AppCompatActivity(), FlutterEngineConfigurator {
 
-    // Flutter runs in a fragment rather than us extending FlutterActivity,
-    // because this activity has to BE an androidx AppCompatActivity.
-    //
-    // CloudStream plugins are handed a Context in `load()`, cast it to
-    // AppCompatActivity, keep it in a static field and later show their own
-    // dialogs on it — CNC Verse's Cloudflare screen works exactly that way, and
-    // so do its subscription/Telegram popups. FlutterActivity descends from
-    // android.app.Activity, so that cast could never succeed; we used to load
-    // such plugins against a throwaway AppCompatActivity that finished
-    // immediately, which left them holding a DEAD activity. Every dialog they
-    // tried to show then died on `BadTokenException` and was swallowed, so the
-    // Cloudflare step silently never ran and the source served a placeholder
-    // stream instead of the real one. CloudStream itself is plain
-    // `MainActivity : AppCompatActivity()`, which is why it never had this
-    // problem. Hosting Flutter in a fragment gets us the same thing: one real,
-    // long-lived AppCompatActivity that plugins can safely hold on to.
+    // Source settings can open against this AppCompatActivity on request.
     private lateinit var flutterFragment: FlutterFragment
     private val channelName = "zangetsu/seek_preview"
     private val executor = Executors.newSingleThreadExecutor()
@@ -282,7 +266,6 @@ class MainActivity : AppCompatActivity(), FlutterEngineConfigurator {
         // Activity here — before extensions load off the splash path — so that
         // returns a real Activity instead of null; otherwise those prefs are never
         // read back and the selection reverts on restart.
-        com.lagradost.cloudstream3.CommonActivity.setActivityInstance(this)
     }
 
     override fun onPause() {
@@ -861,15 +844,7 @@ class MainActivity : AppCompatActivity(), FlutterEngineConfigurator {
                                 // Surface a genuine load failure instead of a
                                 // false "installed": some sources need a newer
                                 // CloudStream API than this build provides.
-                                var ok = host.loadPlugin(file)
-                                // Plugins that cast the load context to an
-                                // AppCompatActivity hard-fail above (we're a
-                                // FlutterActivity). Retry them against a real
-                                // AppCompatActivity, then re-check registration.
-                                if (!ok) {
-                                    loadPluginsViaActivity(host.pendingActivityLoads())
-                                    ok = host.isLoaded(file)
-                                }
+                                val ok = host.loadPlugin(file)
                                 if (ok) {
                                     runOnUiThread { result.success(host.installedApis()) }
                                 } else {
@@ -912,10 +887,6 @@ class MainActivity : AppCompatActivity(), FlutterEngineConfigurator {
                         csExecutor.execute {
                             try {
                                 host.loadAll(repo.cachedFiles())
-                                // Retry any that hard-failed on the AppCompatActivity
-                                // cast against a real activity, so they survive a
-                                // restart (loadAll runs every launch).
-                                loadPluginsViaActivity(host.pendingActivityLoads())
                                 // Plugins that defer registerMainAPI to
                                 // afterPluginsLoadedEvent register now.
                                 host.firePluginsLoaded()
@@ -1693,29 +1664,6 @@ class MainActivity : AppCompatActivity(), FlutterEngineConfigurator {
             pendingPlayerResult = null
             result.success(mapOf("launched" to false))
         }
-    }
-
-    // Load CloudStream plugins that cast the load context to an AppCompatActivity
-    // (our host is a FlutterActivity) by handing them a real one:
-    // CsPluginLoaderActivity loads them against itself. Called from csExecutor
-    // (install / listSources); blocks that background thread until the loader
-    // finishes. No-op when [paths] is empty (the normal case → zero overhead).
-    private fun loadPluginsViaActivity(paths: List<String>) {
-        if (paths.isEmpty()) return
-        val latch = java.util.concurrent.CountDownLatch(1)
-        CsPluginLoaderActivity.onComplete = { latch.countDown() }
-        runOnUiThread {
-            try {
-                val intent = Intent(this, CsPluginLoaderActivity::class.java)
-                intent.putExtra(CsPluginLoaderActivity.EXTRA_PATHS, paths.toTypedArray())
-                startActivity(intent)
-            } catch (e: Exception) {
-                Log.w(TAG, "CsPluginLoaderActivity launch failed: ${e.message}")
-                latch.countDown()
-            }
-        }
-        runCatching { latch.await(25, java.util.concurrent.TimeUnit.SECONDS) }
-        CsPluginLoaderActivity.onComplete = null
     }
 
     @Suppress("UNCHECKED_CAST")

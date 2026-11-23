@@ -8,33 +8,42 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(manifest = Config.NONE, sdk = [34])
+@Config(manifest = Config.NONE, sdk = [33])
 class PhonePlayerBufferTest {
     private val mb = 1024 * 1024
 
     @Test
     fun `high buffer leaves room in a 256 MB heap`() {
-        val control = BufferPresets.loadControl(50_000, 120_000, 512 * mb, 30_000,
-            maxHeapBytes = 256L * mb)
-        assertEquals(64 * mb, field(control, "targetBufferBytesOverwrite"))
-        assertEquals(10_000_000L, field(control, "backBufferDurationUs"))
+        val control = BufferPresets.phoneLoadControl(50_000, 120_000, 512 * mb, 30_000,
+            maxHeapBytes = 256L * mb, usedHeapBytes = 96L * mb)
+        assertEquals(32 * mb, field(control, "targetBufferBytesOverwrite"))
+        assertEquals(0L, field(control, "backBufferDurationUs"))
         assertEquals(false, field(control, "prioritizeTimeOverSizeThresholds"))
-        assertEquals(120_000_000L, field(control, "maxBufferUs"))
+        assertEquals(30_000_000L, field(control, "maxBufferUs"))
     }
 
     @Test
     fun `smaller settings and disabled back buffer are preserved`() {
-        val control = BufferPresets.loadControl(15_000, 15_000, 32 * mb, 0,
-            maxHeapBytes = 256L * mb)
-        assertEquals(32 * mb, field(control, "targetBufferBytesOverwrite"))
+        val control = BufferPresets.phoneLoadControl(15_000, 15_000, 16 * mb, 0,
+            maxHeapBytes = 256L * mb, usedHeapBytes = 32L * mb)
+        assertEquals(16 * mb, field(control, "targetBufferBytesOverwrite"))
+        assertEquals(15_000_000L, field(control, "maxBufferUs"))
         assertEquals(0L, field(control, "backBufferDurationUs"))
     }
 
     @Test
     fun `missing byte setting still receives a safe limit`() {
-        val control = BufferPresets.loadControl(0, 0, 0, 0,
-            maxHeapBytes = 128L * mb)
-        assertEquals(32 * mb, field(control, "targetBufferBytesOverwrite"))
+        val control = BufferPresets.phoneLoadControl(0, 0, 0, 0,
+            maxHeapBytes = 128L * mb, usedHeapBytes = 64L * mb)
+        assertEquals(16 * mb, field(control, "targetBufferBytesOverwrite"))
+    }
+
+    @Test
+    fun `a busy process reduces the buffer below its heap class limit`() {
+        val control = BufferPresets.phoneLoadControl(50_000, 120_000, 512 * mb, 30_000,
+            maxHeapBytes = 256L * mb, usedHeapBytes = 208L * mb)
+        assertEquals(12 * mb, field(control, "targetBufferBytesOverwrite"))
+        assertEquals(0L, field(control, "backBufferDurationUs"))
     }
 
     @Test

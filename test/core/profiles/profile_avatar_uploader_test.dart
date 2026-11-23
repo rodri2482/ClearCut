@@ -7,29 +7,24 @@ import 'package:image/image.dart' as img;
 import 'package:watch_app/core/profiles/profile_avatar_uploader.dart';
 
 void main() {
-  test('profile media uses the signed-in owner folder in Supabase Storage', () async {
-    final adapter = _RecordingAdapter();
-    final dio = Dio()..httpClientAdapter = adapter;
-    final bytes = img.encodePng(img.Image(width: 2, height: 2));
-    await ProfileAvatarUploader(dio).upload(bytes: bytes, token: 'token');
-    expect(adapter.path, startsWith('https://storage.example/storage/v1/object/avatars/user/profile-media/'));
-  });
-
-  test('urlOf takes the Worker public URL', () {
-    expect(
-      ProfileAvatarUploader.urlOf({'url': 'https://cdn.example/a.jpg'}),
-      'https://cdn.example/a.jpg',
-    );
-  });
-
-  test('urlOf rejects error payloads and junk', () {
-    expect(ProfileAvatarUploader.urlOf({'error': 'unauthorized'}), isNull);
-    expect(ProfileAvatarUploader.urlOf('<html>login</html>'), isNull);
-    expect(ProfileAvatarUploader.urlOf(null), isNull);
-  });
+  test(
+    'profile media uses the signed-in owner folder in Supabase Storage',
+    () async {
+      final adapter = _RecordingAdapter();
+      final dio = Dio()..httpClientAdapter = adapter;
+      final bytes = img.encodePng(img.Image(width: 2, height: 2));
+      await _uploader(dio).upload(bytes: bytes, token: 'token');
+      expect(
+        adapter.path,
+        startsWith(
+          'https://storage.example/storage/v1/object/avatars/user/clearcut-profile-',
+        ),
+      );
+    },
+  );
 
   test(
-    'compresses a large transparent PNG below the Worker size limit',
+    'compresses a large transparent PNG below the profile photo size limit',
     () async {
       final adapter = _RecordingAdapter();
       final dio = Dio()..httpClientAdapter = adapter;
@@ -50,12 +45,11 @@ void main() {
       final png = img.encodePng(source, level: 0);
       expect(png.length, greaterThan(ProfileAvatarUploader.maxAvatarBytes));
 
-      final result = await ProfileAvatarUploader(
-        dio,
-      ).upload(bytes: png, token: 'token');
+      final result = await _uploader(dio).upload(bytes: png, token: 'token');
 
-      expect(result, 'https://cdn.example/avatar.jpg');
+      expect(result, _publicUpload(adapter));
       expect(adapter.authorization, 'Bearer token');
+      expect(adapter.publishableKey, 'publishable-test');
       expect(adapter.contentType, 'image/png');
       expect(
         adapter.contentLength,
@@ -75,11 +69,9 @@ void main() {
     source.clear(img.ColorRgba8(30, 60, 90, 120));
     final png = img.encodePng(source);
 
-    final result = await ProfileAvatarUploader(
-      dio,
-    ).upload(bytes: png, token: 'token');
+    final result = await _uploader(dio).upload(bytes: png, token: 'token');
 
-    expect(result, 'https://cdn.example/avatar.jpg');
+    expect(result, _publicUpload(adapter));
     expect(adapter.requests, 1);
     expect(adapter.contentType, 'image/png');
   });
@@ -89,11 +81,9 @@ void main() {
     final dio = Dio()..httpClientAdapter = adapter;
     final gif = _animatedGif();
 
-    final result = await ProfileAvatarUploader(
-      dio,
-    ).upload(bytes: gif, token: 'token');
+    final result = await _uploader(dio).upload(bytes: gif, token: 'token');
 
-    expect(result, 'https://cdn.example/avatar.gif');
+    expect(result, _publicUpload(adapter));
     expect(adapter.contentType, 'image/gif');
     expect(ProfileAvatarUploader.isAllowedGif(adapter.uploadedBytes), isTrue);
     expect(adapter.uploadedBytes, gif);
@@ -108,11 +98,9 @@ void main() {
     expect(gif.length, lessThanOrEqualTo(1024 * 1024));
     expect(ProfileAvatarUploader.isAllowedGif(gif), isTrue);
 
-    final result = await ProfileAvatarUploader(
-      dio,
-    ).upload(bytes: gif, token: 'token');
+    final result = await _uploader(dio).upload(bytes: gif, token: 'token');
 
-    expect(result, 'https://cdn.example/avatar.gif');
+    expect(result, _publicUpload(adapter));
     expect(adapter.contentLength, gif.length);
     expect(adapter.uploadedBytes, gif);
   });
@@ -121,9 +109,7 @@ void main() {
     final adapter = _RecordingAdapter();
     final dio = Dio()..httpClientAdapter = adapter;
 
-    await ProfileAvatarUploader(
-      dio,
-    ).upload(bytes: _animatedGif(repeat: 2), token: 'token');
+    await _uploader(dio).upload(bytes: _animatedGif(repeat: 2), token: 'token');
 
     final uploaded = img.decodeGif(adapter.uploadedBytes)!;
     expect(uploaded.loopCount, 0);
@@ -136,9 +122,7 @@ void main() {
     final dio = Dio()..httpClientAdapter = adapter;
     final gifWithoutLoopMetadata = _withoutLoopMetadata(_animatedGif());
 
-    await ProfileAvatarUploader(
-      dio,
-    ).upload(bytes: gifWithoutLoopMetadata, token: 'token');
+    await _uploader(dio).upload(bytes: gifWithoutLoopMetadata, token: 'token');
 
     final uploaded = img.decodeGif(adapter.uploadedBytes)!;
     expect(uploaded.loopCount, 0);
@@ -164,7 +148,7 @@ void main() {
       );
       final gif = source.finish()!;
 
-      await ProfileAvatarUploader(dio).upload(bytes: gif, token: 'token');
+      await _uploader(dio).upload(bytes: gif, token: 'token');
 
       final uploaded = img.decodeGif(adapter.uploadedBytes)!;
       expect(uploaded.width, 512);
@@ -182,7 +166,7 @@ void main() {
     final png = img.encodePng(source);
     expect(png.length, lessThanOrEqualTo(ProfileAvatarUploader.maxAvatarBytes));
 
-    await ProfileAvatarUploader(dio).upload(bytes: png, token: 'token');
+    await _uploader(dio).upload(bytes: png, token: 'token');
 
     final uploaded = img.decodeImage(adapter.uploadedBytes)!;
     expect(uploaded.width, 700);
@@ -198,11 +182,11 @@ void main() {
         ..clear(img.ColorRgb8(30, 60, 90));
       final png = img.encodePng(source);
 
-      final result = await ProfileAvatarUploader(
+      final result = await _uploader(
         dio,
       ).uploadCover(bytes: png, token: 'token');
 
-      expect(result, 'https://cdn.example/avatar.jpg');
+      expect(result, _publicUpload(adapter));
       expect(adapter.contentType, 'image/jpeg');
       expect(adapter.contentLength, lessThanOrEqualTo(512 * 1024));
       final uploaded = img.decodeImage(adapter.uploadedBytes)!;
@@ -232,7 +216,7 @@ void main() {
       final png = img.encodePng(source, level: 0);
       expect(png.length, greaterThan(ProfileAvatarUploader.maxAvatarBytes));
 
-      await ProfileAvatarUploader(dio).upload(bytes: png, token: 'token');
+      await _uploader(dio).upload(bytes: png, token: 'token');
 
       final uploaded = img.decodeImage(adapter.uploadedBytes)!;
       expect(uploaded.width / uploaded.height, closeTo(2, 0.01));
@@ -245,11 +229,9 @@ void main() {
     final gif = _largeAnimatedGif();
     expect(gif.length, greaterThan(ProfileAvatarUploader.maxAvatarBytes));
 
-    final result = await ProfileAvatarUploader(
-      dio,
-    ).upload(bytes: gif, token: 'token');
+    final result = await _uploader(dio).upload(bytes: gif, token: 'token');
 
-    expect(result, 'https://cdn.example/avatar.gif');
+    expect(result, _publicUpload(adapter));
     expect(adapter.contentType, 'image/gif');
     expect(ProfileAvatarUploader.isAllowedGif(adapter.uploadedBytes), isTrue);
     expect(
@@ -284,7 +266,7 @@ void main() {
         );
       }
 
-      final result = await ProfileAvatarUploader(
+      final result = await _uploader(
         dio,
       ).upload(bytes: encoder.finish()!, token: 'token');
 
@@ -311,11 +293,9 @@ void main() {
     final png = img.encodePng(source, level: 0);
     expect(png.length, greaterThan(ProfileAvatarUploader.maxAvatarBytes));
 
-    final result = await ProfileAvatarUploader(
-      dio,
-    ).upload(bytes: png, token: 'token');
+    final result = await _uploader(dio).upload(bytes: png, token: 'token');
 
-    expect(result, 'https://cdn.example/avatar.jpg');
+    expect(result, _publicUpload(adapter));
     expect(adapter.contentType, 'image/jpeg');
     expect(
       adapter.contentLength,
@@ -329,7 +309,7 @@ void main() {
     final adapter = _RecordingAdapter();
     final dio = Dio()..httpClientAdapter = adapter;
 
-    final result = await ProfileAvatarUploader(
+    final result = await _uploader(
       dio,
     ).upload(bytes: Uint8List.fromList([1, 2, 3]), token: 'token');
 
@@ -341,21 +321,39 @@ void main() {
     final adapter = _RecordingAdapter();
     final dio = Dio()..httpClientAdapter = adapter;
 
-    final deleted = await ProfileAvatarUploader(
-      dio,
-    ).delete(url: 'https://cdn.example/avatars/user/photo.jpg', token: 'token');
+    final deleted = await _uploader(dio).delete(
+      url:
+          'https://storage.example/storage/v1/object/public/avatars/user/clearcut-profile-1-2.jpg',
+      token: 'token',
+    );
 
     expect(deleted, isTrue);
     expect(adapter.method, 'DELETE');
-    expect(adapter.data, {'url': 'https://cdn.example/avatars/user/photo.jpg'});
+    expect(adapter.data, {
+      'prefixes': ['user/clearcut-profile-1-2.jpg'],
+    });
     expect(adapter.authorization, 'Bearer token');
   });
 
-  test('does not send KLIPY avatar references to R2 deletion', () async {
+  test('never deletes another account’s photo or an unrelated URL', () async {
+    final adapter = _RecordingAdapter();
+    final dio = Dio()..httpClientAdapter = adapter;
+    final uploader = _uploader(dio);
+    for (final url in [
+      'https://storage.example/storage/v1/object/public/avatars/other/clearcut-profile-1-2.jpg',
+      'https://other.example/storage/v1/object/public/avatars/user/clearcut-profile-1-2.jpg',
+      'https://storage.example/storage/v1/object/public/avatars/user/account.jpg',
+    ]) {
+      expect(await uploader.delete(url: url, token: 'token'), isFalse);
+    }
+    expect(adapter.requests, 0);
+  });
+
+  test('does not send KLIPY avatar references to storage deletion', () async {
     final adapter = _RecordingAdapter();
     final dio = Dio()..httpClientAdapter = adapter;
 
-    final deleted = await ProfileAvatarUploader(
+    final deleted = await _uploader(
       dio,
     ).delete(url: 'klipy:one-piece-zoro', token: 'token');
 
@@ -363,11 +361,11 @@ void main() {
     expect(adapter.requests, 0);
   });
 
-  test('does not send KLIPY media URLs to R2 deletion', () async {
+  test('does not send KLIPY media URLs to storage deletion', () async {
     final adapter = _RecordingAdapter();
     final dio = Dio()..httpClientAdapter = adapter;
 
-    final deleted = await ProfileAvatarUploader(
+    final deleted = await _uploader(
       dio,
     ).delete(url: 'https://static.klipy.com/zoro-wave.gif', token: 'token');
 
@@ -375,6 +373,16 @@ void main() {
     expect(adapter.requests, 0);
   });
 }
+
+ProfileAvatarUploader _uploader(Dio dio) => ProfileAvatarUploader(
+  dio,
+  currentUserId: () => 'user',
+  projectUrl: 'https://storage.example',
+  publishableKey: 'publishable-test',
+);
+
+String _publicUpload(_RecordingAdapter adapter) =>
+    adapter.path!.replaceFirst('/object/avatars/', '/object/public/avatars/');
 
 Uint8List _animatedGif({int repeat = 0}) {
   final encoder = img.GifEncoder(repeat: repeat, samplingFactor: 1);
@@ -459,6 +467,7 @@ class _RecordingAdapter implements HttpClientAdapter {
   int requests = 0;
   String? method;
   String? path;
+  String? publishableKey;
   dynamic data;
   String? authorization;
   String? contentType;
@@ -470,6 +479,7 @@ class _RecordingAdapter implements HttpClientAdapter {
     requests++;
     method = options.method;
     path = options.path;
+    publishableKey = options.headers['apikey'] as String?;
     data = options.data;
     authorization = options.headers['Authorization'] as String?;
     contentType = options.headers[Headers.contentTypeHeader] as String?;

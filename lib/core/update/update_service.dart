@@ -45,9 +45,11 @@ class UpdateInfo {
 /// the latest tag to the running build, downloads the matching APK and hands it
 /// to the Android package installer. The repo is public, so no token is needed.
 class UpdateService {
-  // A separate PUBLIC repo holds only the signed APK releases. The source
-  // repo stays private; GitHub's unauthenticated Releases API can still see
-  // this one, so the updater works without a token.
+  // A separate PUBLIC repo holds the signed APK releases so the updater works
+  // without a token. ClearCut is GPL-3.0: the complete corresponding source of
+  // every released binary must be published alongside it (see
+  // supabase/README.md and the repository's LICENSE). Do not ship a release
+  // from a build whose source is only on a private remote.
   static const String _repo = 'rodri2482/clearcut-releases';
   static const String _latestUrl =
       'https://api.github.com/repos/$_repo/releases/latest';

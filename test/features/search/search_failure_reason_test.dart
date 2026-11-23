@@ -155,11 +155,30 @@ class _FakeRepo implements SourceRepository {
   @override
   void syncSearchCache() {}
 
+  // SourceRepository is an InstantSearchSource; SearchBloc asks for instant
+  // results before the live fan-out. This fake has no disk cache, so report
+  // nothing instead of throwing from noSuchMethod.
+  @override
+  List<({String sourceId, List<MediaItem> items})> cachedSearch(
+    String query, {
+    required Iterable<String> sourceIds,
+    String category = 'sub',
+    Map<String, String?> filters = const {},
+    int page = 1,
+  }) => const [];
+
+  @override
+  List<MediaItem> indexedSearch(
+    String query, {
+    required Iterable<String> sourceIds,
+    int limit = 24,
+  }) => const [];
+
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 
   @override
-  bool hasSource(String sourceId) => throw UnimplementedError();
+  bool hasSource(String sourceId) => true;
 
   @override
   Future<List<MediaItem>> popular({

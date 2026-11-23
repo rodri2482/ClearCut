@@ -36,19 +36,21 @@ import '../../core/zmode/playback_resolver.dart';
 Future<SourceProbe?> showEpisodeSourcesSheet(
   BuildContext context, {
   required Episode episode,
+  String category = 'sub',
 }) => showDialog<SourceProbe>(
   context: context,
   builder: (_) => Dialog(
     backgroundColor: AppColors.surface,
     insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-    child: _EpisodeSourcesBody(episode: episode),
+    child: _EpisodeSourcesBody(episode: episode, category: category),
   ),
 );
 
 class _EpisodeSourcesBody extends StatefulWidget {
-  const _EpisodeSourcesBody({required this.episode});
+  const _EpisodeSourcesBody({required this.episode, required this.category});
   final Episode episode;
+  final String category;
 
   @override
   State<_EpisodeSourcesBody> createState() => _EpisodeSourcesBodyState();
@@ -132,7 +134,9 @@ class _EpisodeSourcesBodyState extends State<_EpisodeSourcesBody> {
           repo: (r.repo?.isNotEmpty ?? false) ? r.repo : null,
         );
       }
-    } catch (_) {/* tags are cosmetic */}
+    } catch (_) {
+      /* tags are cosmetic */
+    }
     _start();
   }
 
@@ -140,7 +144,7 @@ class _EpisodeSourcesBodyState extends State<_EpisodeSourcesBody> {
     setState(() => _done = false);
     _sub?.cancel();
     _sub = sl<PlaybackResolver>()
-        .probeEach(widget.episode.url, skip: _asked)
+        .probeEach(widget.episode.url, skip: _asked, category: widget.category)
         .listen(
           (p) {
             if (!mounted) return;
@@ -192,6 +196,13 @@ class _EpisodeSourcesBodyState extends State<_EpisodeSourcesBody> {
     super.dispose();
   }
 
+  /// Working links first, then sources that merely list the episode.
+  List<SourceProbe> get _sortedFound {
+    final rows = List<SourceProbe>.from(_found);
+    rows.sort((a, b) => (b.playable ? 1 : 0).compareTo(a.playable ? 1 : 0));
+    return rows;
+  }
+
   String get _status {
     // Nothing installed at all: there is no survey to report on, and "none of
     // the 0 checked" would be a nonsense sentence in front of a new user.
@@ -204,10 +215,21 @@ class _EpisodeSourcesBodyState extends State<_EpisodeSourcesBody> {
       final line = 'Checking $next of $_total sources…';
       return _checking == null ? line : '$line $_checking';
     }
-    final n = _found.length;
-    if (n == 0) return 'None of the ${_asked.length} checked lists it';
+    final n = _found.where((p) => p.playable).length;
+    final listedOnly = _found.length - n;
+    if (n == 0 && listedOnly == 0) {
+      return 'None of the ${_asked.length} checked lists it';
+    }
     final left = _total - _asked.length;
-    return '$n ${n == 1 ? "source has" : "sources have"} it'
+    final headline = n == 0
+        ? 'No source played it of ${_asked.length} checked'
+        : '$n ${n == 1 ? "source plays" : "sources play"} it';
+    // Be honest about a source that only lists the episode: it is kept in the
+    // list (the viewer can still try it), but it is not counted as a find.
+    final dead =
+        listedOnly > 0 ? ' · $listedOnly list it but no link plays' : '';
+    return headline +
+        dead +
         '${left > 0 ? " · $left not asked" : ""}';
   }
 
@@ -220,106 +242,102 @@ class _EpisodeSourcesBodyState extends State<_EpisodeSourcesBody> {
         maxHeight: MediaQuery.sizeOf(context).height * 0.62,
       ),
       child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      n == null
-                          ? 'Where to watch'
-                          : 'Where to watch episode $n',
-                      style: AppText.title.copyWith(fontSize: 17),
-                    ),
-                  ),
-                  // A dialog with a running job in it needs a way out that
-                  // isn't guessing whether tapping outside will work.
-                  _tvAware(
-                    onTap: () => Navigator.pop(context),
-                    semanticLabel: 'Close',
-                    child: Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: Icon(
-                        Icons.close_rounded,
-                        size: 20,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                _status,
-                style: AppText.caption,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 10),
-              if (!_done)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(2),
-                  child: LinearProgressIndicator(
-                    minHeight: 3,
-                    backgroundColor: AppColors.hairline,
-                    color: AppColors.accent,
-                  ),
-                ),
-              if (_total == 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
+        padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
                   child: Text(
-                    'Install a source from the Sources tab and this will show '
-                    'which of them has each episode.',
-                    style: AppText.caption.copyWith(
-                      color: AppColors.textTertiary,
-                    ),
+                    n == null ? 'Where to watch' : 'Where to watch episode $n',
+                    style: AppText.title.copyWith(fontSize: 17),
                   ),
                 ),
-              if (_found.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Flexible(
-                  child: ListView.builder(
-                    padding: EdgeInsets.zero,
-                    shrinkWrap: true,
-                    itemCount: _found.length,
-                    itemBuilder: (context, i) => _FoundRow(
-                      probe: _found[i],
-                      tag: _tags[_found[i].sourceId],
-                      onTap: () => Navigator.pop(context, _found[i]),
+                // A dialog with a running job in it needs a way out that
+                // isn't guessing whether tapping outside will work.
+                _tvAware(
+                  onTap: () => Navigator.pop(context),
+                  semanticLabel: 'Close',
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 20,
+                      color: AppColors.textSecondary,
                     ),
                   ),
                 ),
               ],
-              if (!_done) ...[
-                const SizedBox(height: 12),
-                _WideButton(
-                  label: 'Stop',
-                  onTap: _stop,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _status,
+              style: AppText.caption,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 10),
+            if (!_done)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  minHeight: 3,
+                  backgroundColor: AppColors.hairline,
+                  color: AppColors.accent,
                 ),
-              ] else if (more) ...[
-                const SizedBox(height: 12),
-                _WideButton(
-                  label: 'Check the remaining ${_total - _asked.length}',
-                  onTap: _start,
+              ),
+            if (_total == 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Install a source from the Sources tab and this will show '
+                  'which of them has each episode.',
+                  style: AppText.caption.copyWith(
+                    color: AppColors.textTertiary,
+                  ),
                 ),
-              ],
+              ),
+            if (_found.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Flexible(
+                child: ListView.builder(
+                  padding: EdgeInsets.zero,
+                  shrinkWrap: true,
+                  // Verified hits first: a source that only lists the episode
+                  // should not sit above one that actually played a link.
+                  itemCount: _sortedFound.length,
+                  itemBuilder: (context, i) {
+                    final p = _sortedFound[i];
+                    return _FoundRow(
+                      probe: p,
+                      tag: _tags[p.sourceId],
+                      onTap: () => Navigator.pop(context, p),
+                    );
+                  },
+                ),
+              ),
             ],
-          ),
+            if (!_done) ...[
+              const SizedBox(height: 12),
+              _WideButton(label: 'Stop', onTap: _stop),
+            ] else if (more) ...[
+              const SizedBox(height: 12),
+              _WideButton(
+                label: 'Check the remaining ${_total - _asked.length}',
+                onTap: _start,
+              ),
+            ],
+          ],
         ),
+      ),
     );
   }
 }
 
 class _FoundRow extends StatelessWidget {
-  const _FoundRow({
-    required this.probe,
-    required this.onTap,
-    this.tag,
-  });
+  const _FoundRow({required this.probe, required this.onTap, this.tag});
   final SourceProbe probe;
 
   /// The picker's own label (ecosystem-prefixed) and repo, when the registries
@@ -335,7 +353,13 @@ class _FoundRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 2),
       child: Row(
         children: [
-          Icon(Icons.play_arrow_rounded, size: 20, color: AppColors.accent),
+          Icon(
+            probe.playable
+                ? Icons.play_arrow_rounded
+                : Icons.report_problem_outlined,
+            size: 20,
+            color: probe.playable ? AppColors.accent : AppColors.textTertiary,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -360,6 +384,18 @@ class _FoundRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ],
+                if (!probe.playable) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    'Lists it, but no link played when checked',
+                    style: AppText.caption.copyWith(
+                      color: AppColors.textTertiary,
+                      fontSize: 11,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ],
             ),
           ),
@@ -373,7 +409,6 @@ class _FoundRow extends StatelessWidget {
     ),
   );
 }
-
 
 /// D-pad focus with the app's own highlight on TV, a plain InkWell on a
 /// phone. A bare InkWell is reachable by remote but draws nothing, so on TV

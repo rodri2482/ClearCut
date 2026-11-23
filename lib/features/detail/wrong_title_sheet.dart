@@ -16,6 +16,7 @@ import '../../core/ui/states.dart';
 import '../../core/ui/source_switcher.dart';
 import '../../core/theme/app_text.dart';
 import '../../core/zmode/match_store.dart';
+import '../../core/zmode/playback_resolver.dart';
 import '../../core/zmode/source_matcher.dart';
 import '../../core/zmode/zmode_ids.dart';
 import '../../core/zmode/zmode_module.dart';
@@ -38,6 +39,8 @@ class MatchLine extends StatefulWidget {
     this.altTitle,
     this.malId,
     this.metadataAliases = const [],
+    this.playbackEpisodeUrl,
+    this.playbackCategory = 'sub',
   });
 
   final ZCanonical canonical;
@@ -45,6 +48,8 @@ class MatchLine extends StatefulWidget {
   final String? altTitle;
   final int? malId;
   final List<String> metadataAliases;
+  final String? playbackEpisodeUrl;
+  final String playbackCategory;
 
   @override
   State<MatchLine> createState() => _MatchLineState();
@@ -111,7 +116,27 @@ class _MatchLineState extends State<MatchLine> {
       // that title to it; this is how you undo that.
       autoSelected: state.auto,
       onAutoResolve: () async {
-        await _cubit.selectAuto();
+        final episodeUrl = widget.playbackEpisodeUrl;
+        final resolver = sl.isRegistered<PlaybackResolver>()
+            ? sl<PlaybackResolver>()
+            : null;
+        await _cubit.selectAuto(
+          findPlayable: episodeUrl == null || resolver == null
+              ? null
+              : () async {
+                  try {
+                    final found = await resolver
+                        .resolveProgressive(
+                          episodeUrl,
+                          category: widget.playbackCategory,
+                        )
+                        .first;
+                    return found.match;
+                  } catch (_) {
+                    return null;
+                  }
+                },
+        );
         if (mounted) _refreshAfterMatchChange();
       },
       onPick: (id) async {

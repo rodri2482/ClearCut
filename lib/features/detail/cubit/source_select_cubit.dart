@@ -221,6 +221,7 @@ class SourceSelectCubit extends Cubit<SourceSelectState> {
   /// The user picked [id] for THIS title only — searches it fresh and pins
   /// whatever it finds, without changing any other title of this kind.
   Future<void> selectSource(String id) async {
+    final generation = ++_loadGeneration;
     emit(
       SourceSelectState(
         sources: state.sources,
@@ -237,7 +238,7 @@ class SourceSelectCubit extends Cubit<SourceSelectState> {
       metadataAliases: metadataAliases,
       malId: malId,
     );
-    if (isClosed) return;
+    if (isClosed || generation != _loadGeneration) return;
     emit(
       SourceSelectState(
         sources: state.sources,
@@ -252,7 +253,10 @@ class SourceSelectCubit extends Cubit<SourceSelectState> {
   /// Drop this title's own pin AND the kind's explicit default — genuinely
   /// back to sweeping, not just to whichever fixed source the kind default
   /// names.
-  Future<void> selectAuto() async {
+  Future<void> selectAuto({
+    Future<SourceMatch?> Function()? findPlayable,
+  }) async {
+    final generation = ++_loadGeneration;
     emit(
       SourceSelectState(
         sources: state.sources,
@@ -263,14 +267,16 @@ class SourceSelectCubit extends Cubit<SourceSelectState> {
       ),
     );
     await _matcher.clearAuto(_canonical);
-    final m = await _matcher.resolve(
-      _canonical,
-      title: _title,
-      altTitle: altTitle,
-      metadataAliases: metadataAliases,
-      malId: malId,
-    );
-    if (isClosed) return;
+    final m = findPlayable == null
+        ? await _matcher.resolve(
+            _canonical,
+            title: _title,
+            altTitle: altTitle,
+            metadataAliases: metadataAliases,
+            malId: malId,
+          )
+        : await findPlayable();
+    if (isClosed || generation != _loadGeneration) return;
     emit(
       SourceSelectState(
         sources: state.sources,

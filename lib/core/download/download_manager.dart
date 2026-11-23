@@ -600,12 +600,15 @@ class DownloadManager extends ChangeNotifier {
     _put(rec.copyWith(status: DownloadStatus.resolving));
     notifyListeners();
     try {
-      final sources = await _repo.sources(
-        rec.episodeUrl,
-        sourceId: rec.sourceId,
-      );
+      // A download needs EVERY mirror so it can pick a fast, complete file.
+      // The `fast: true` path returns only the first link and burns the
+      // detail-screen prefetch; starting there made downloads land on a slow
+      // partial mirror and poisoned the cache used by playback.
+      final sources = await _repo
+          .sources(rec.episodeUrl, sourceId: rec.sourceId)
+          .catchError((Object _) => const <VideoSource>[]);
       if (_isCanceled(rec.id)) return; // canceled while resolving
-      final ranked = _ranked(sources, rec.quality, category: rec.category);
+      var ranked = _ranked(sources, rec.quality, category: rec.category);
       if (ranked.isEmpty) {
         // Everything this source offers is a manifest. Another source may
         // serve real files — that is worth trying before saying no.
@@ -618,7 +621,7 @@ class DownloadManager extends ChangeNotifier {
         _put(
           rec.copyWith(
             status: DownloadStatus.unsupported,
-            error: () => 'No downloadable (non-HLS) source',
+            error: () => 'No downloadable source',
           ),
         );
         notifyListeners();
@@ -628,6 +631,7 @@ class DownloadManager extends ChangeNotifier {
       await _enqueueTaskFor(rec, ranked.first);
     } catch (e) {
       if (_isCanceled(rec.id)) return;
+      if (await _tryAnotherSource(rec) || _isCanceled(rec.id)) return;
       AppLogger.instance.log(
         'download resolve failed (${rec.showTitle}): $e',
         level: 'E',
@@ -667,6 +671,7 @@ class DownloadManager extends ChangeNotifier {
   /// Records currently mid-sweep, so a record can't start a second one for
   /// itself while the first is still running.
   final Set<String> _sweeping = {};
+  final Map<String, Set<String>> _attemptedUrls = {};
 
   /// Find a source that can actually produce a file, in ONE sweep.
   ///
@@ -684,13 +689,19 @@ class DownloadManager extends ChangeNotifier {
     try {
       final next = await GetIt.I<MetadataRepository>().sourcesWhere(
         rec.episodeUrl,
-        (streams) => sourcesForDownloadCategory(
-          streams,
-          rec.category,
-        ).any((s) => !isDash(s)),
+        (streams) => sourcesForDownloadCategory(streams, rec.category).any(
+          (s) =>
+              !isDash(s) && !(_attemptedUrls[rec.id]?.contains(s.url) ?? false),
+        ),
       );
       if (_isCanceled(rec.id)) return true;
-      final ranked = _ranked(next.streams, rec.quality, category: rec.category);
+      final ranked = _ranked(
+        next.streams
+            .where((s) => !(_attemptedUrls[rec.id]?.contains(s.url) ?? false))
+            .toList(),
+        rec.quality,
+        category: rec.category,
+      );
       if (ranked.isEmpty) return false;
       AppLogger.instance.log(
         '[download] ${rec.showTitle} · ${rec.episodeTitle}: swept past the '
@@ -717,6 +728,7 @@ class DownloadManager extends ChangeNotifier {
   /// downloader, everything else via background_downloader.
   Future<void> _enqueueTaskFor(DownloadRecord rec, VideoSource source) async {
     if (_isCanceled(rec.id)) return; // don't (re)start a canceled download
+    (_attemptedUrls[rec.id] ??= <String>{}).add(source.url);
     // Save any soft subtitles this source advertises, in parallel with the
     // video (they're tiny and best-effort — never block or fail the download).
     unawaited(_fetchSubtitles(rec, source));
@@ -1366,6 +1378,7 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
     _candidates.remove(rec.id); // resolve fresh mirrors
+    _attemptedUrls.remove(rec.id);
     await _resolveAndEnqueue(
       rec.copyWith(status: DownloadStatus.queued, error: () => null),
     );
@@ -1373,6 +1386,7 @@ class DownloadManager extends ChangeNotifier {
 
   Future<void> cancel(DownloadRecord rec) async {
     _candidates.remove(rec.id); // user stopped it — don't auto-advance mirrors
+    _attemptedUrls.remove(rec.id);
     // Mark canceled FIRST so any in-flight resolve/update sees it and bails
     // (otherwise a resolve finishing after cancel would re-enqueue, leaving the
     // tile stuck "loading" despite saying canceled).
@@ -1412,6 +1426,7 @@ class DownloadManager extends ChangeNotifier {
   /// Cancel (if active) and forget the record + delete the saved file.
   Future<void> delete(DownloadRecord rec) async {
     _candidates.remove(rec.id);
+    _attemptedUrls.remove(rec.id);
     final current = _records[rec.id];
     if (current != null && current.status != DownloadStatus.canceled) {
       // Stop late callbacks/resolvers before cleanup awaits give them a chance
@@ -1759,6 +1774,7 @@ class DownloadManager extends ChangeNotifier {
     }
 
     _candidates.remove(rec.id); // success — no more fallbacks needed
+    _attemptedUrls.remove(rec.id);
     await _markDone(rec, path);
   }
 

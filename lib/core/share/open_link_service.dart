@@ -37,6 +37,15 @@ class OpenLinkService {
   final AppLinks _appLinks = AppLinks();
   StreamSubscription<Uri>? _sub;
 
+  /// True once a real link (share, pair, local video) has been routed. The
+  /// startup "resume last playback" restore must not pile a second screen on
+  /// top of a link the viewer actually tapped.
+  bool handledLink = false;
+
+  /// Route a link produced inside the app (currently the last-playback restore
+  /// after a cold start). Goes through the same cold-start-safe path as OS links.
+  void open(Uri uri) => _onLink(uri);
+
   /// A link can arrive before the app is ready for it — see [appShellReady],
   /// which explains both ways a cold launch used to lose the screen it opened.
   ///
@@ -48,6 +57,7 @@ class OpenLinkService {
   }
 
   void _route(Uri uri) {
+    handledLink = true;
     // A local video handed over from a file manager / Downloads ("Open with").
     // Checked first because it's the one case that can't be a zangetsu:// or
     // https:// link, so it can never shadow the handlers below.

@@ -61,6 +61,24 @@ VideoSource _src({
 );
 
 void main() {
+  test('native episode label shows the episode number only once', () {
+    const episode = Episode(
+      id: '1',
+      title: 'Episode 1: Asteroid Blues',
+      number: 1,
+      url: '/episode/1',
+    );
+    expect(
+      phoneEpisodeLabel(
+        episode,
+        showTitle: 'Cowboy Bebop',
+        isMovie: false,
+        episodeCount: 26,
+      ),
+      'Episode 1 · Asteroid Blues',
+    );
+  });
+
   test('native movie display data retains the real playable row', () {
     final data = phoneWatchPageData(
       episodes: const [
@@ -762,36 +780,38 @@ void main() {
       expect(called, isFalse);
     });
 
-    test('skipped when the preference is off or nothing identifies the title',
-        () async {
-      var called = false;
-      Future<List<({String lang, String url})>> noFetch() async {
-        called = true;
-        return [];
-      }
+    test(
+      'skipped when the preference is off or nothing identifies the title',
+      () async {
+        var called = false;
+        Future<List<({String lang, String url})>> noFetch() async {
+          called = true;
+          return [];
+        }
 
-      expect(
-        await autoDownloadedPhoneSubtitle(
-          existing: const [],
-          autoDownload: false,
-          hasIdentifiers: true,
-          iso2: 'eng',
-          fetch: noFetch,
-        ),
-        isNull,
-      );
-      expect(
-        await autoDownloadedPhoneSubtitle(
-          existing: const [],
-          autoDownload: true,
-          hasIdentifiers: false,
-          iso2: 'eng',
-          fetch: noFetch,
-        ),
-        isNull,
-      );
-      expect(called, isFalse);
-    });
+        expect(
+          await autoDownloadedPhoneSubtitle(
+            existing: const [],
+            autoDownload: false,
+            hasIdentifiers: true,
+            iso2: 'eng',
+            fetch: noFetch,
+          ),
+          isNull,
+        );
+        expect(
+          await autoDownloadedPhoneSubtitle(
+            existing: const [],
+            autoDownload: true,
+            hasIdentifiers: false,
+            iso2: 'eng',
+            fetch: noFetch,
+          ),
+          isNull,
+        );
+        expect(called, isFalse);
+      },
+    );
 
     test('maps the first result to a default track', () async {
       final got = await autoDownloadedPhoneSubtitle(
@@ -806,6 +826,20 @@ void main() {
       expect(got?.format, 'srt');
       expect(got?.isDefault, isTrue);
     });
+
+    test(
+      'finds English when a source only carries another subtitle language',
+      () async {
+        final got = await autoDownloadedPhoneSubtitle(
+          existing: const [Subtitle(url: 'https://x/de.srt', lang: 'de')],
+          autoDownload: true,
+          hasIdentifiers: true,
+          iso2: 'eng',
+          fetch: () async => [(lang: 'en', url: 'https://x/en.srt')],
+        );
+        expect(got?.url, 'https://x/en.srt');
+      },
+    );
 
     test('empty results and blank urls yield nothing', () async {
       expect(

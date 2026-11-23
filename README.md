@@ -20,16 +20,15 @@ Stream and download anime episodes, anime movies, TV series and movies. A built-
 - **Watch ad-free**: the NoFlix web player opens any movie or show by its TMDB id. An AdGuard / EasyPrivacy ad blocker with a native engine removes ads, pop-ups, trackers and redirects.
 - **Downloads**: save episodes and movies (including HLS streams with subtitles) for offline viewing. Downloads keep running in the background.
 - **Built-in free sources** that work with no setup:
-  - **Internet Archive (free films)**: public-domain classics such as sci-fi and horror, comedy and the silent era, played straight from archive.org's MP4 files in up to 1080p.
-  - **NASA (free space videos)**: launches, missions, Mars, the ISS and telescopes from NASA's Image and Video Library, in up to 1080p with NASA's captions.
-  - **Wikimedia Commons (free films)**: public-domain and freely licensed films, animation, short films and newsreels. Each title shows its author and licence.
-  - **Blender Open Movies**: the Blender Foundation's 14 Creative Commons animated films, from *Elephants Dream* (2006) to *Wing It!* (2023), in up to 4K, credited to Blender with their licences.
+  - **FrameXTV**: movies and series, shipped as supplied.
   - **Project Gutenberg (free books)**: over 70,000 public-domain books with covers, split into chapters, in the Novel reader. If gutenberg.org is down, they load from the official PGLAF mirror.
+  - **Wikisource texts**: public-domain source texts for the reader.
+  - Internet Archive, NASA, Wikimedia Commons, Blender, Prelinger, PeerTube, Openverse and WikiFlix are **not** bundled.
 - **Gestures in the ad-free player**: swipe left or right to seek, swipe up or down on the right for volume and on the left for brightness. The native player also has double-tap seek and pinch-to-zoom.
 - **Extensions**: add Aniyomi, CloudStream, Stremio and Mihon extension repositories from **Settings → Extensions**. ClearCut ships with no third-party repositories. You choose which ones to add.
 - **Manga and light novels**: separate reading modes with their own readers.
 - **Android TV**: a full remote-friendly interface.
-- **Private**: no account, no analytics, and no developer servers. History, library and downloads stay on your device.
+- **Private by default**: no account is required and no developer servers are contacted. History, library and downloads stay on your device. An optional Supabase build adds accounts, cloud sync and profile photos — see [`supabase/README.md`](supabase/README.md).
 
 ## Download
 
@@ -57,6 +56,16 @@ ZANGETSU_NO_DISCORD=1 flutter build apk --debug
 ```bash
 ZANGETSU_NO_DISCORD=1 flutter build apk --release --split-per-abi
 ```
+
+**Cloud build (optional).** Add your Supabase project at build time. Without these defines the app is fully offline and the account/sync entries are hidden:
+
+```bash
+flutter build apk --release \
+  --dart-define=SUPABASE_URL=https://<project>.supabase.co \
+  --dart-define=SUPABASE_ANON_KEY=sb_publishable_...
+```
+
+The publishable key is safe to ship; never ship a `service_role` key. Run [`supabase/schema.sql`](supabase/schema.sql) in the project's SQL editor and follow [`supabase/README.md`](supabase/README.md) for the auth redirect allowlist.
 
 Without `key.properties`, release builds fall back to debug signing. Never commit the keystore or `key.properties`. Both are git-ignored.
 

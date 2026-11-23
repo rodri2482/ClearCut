@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
+import 'package:watch_app/core/di/injector.dart';
 import 'package:watch_app/core/models/episode.dart';
 import 'package:watch_app/core/models/media_item.dart';
 import 'package:watch_app/core/models/provider_info.dart';
@@ -13,6 +14,7 @@ import 'package:watch_app/core/zmode/match_store.dart';
 import 'package:watch_app/core/zmode/playback_resolver.dart';
 import 'package:watch_app/core/zmode/source_matcher.dart';
 import 'package:watch_app/core/zmode/source_score_store.dart';
+import 'package:watch_app/core/zmode/source_order_prefs.dart';
 import 'package:watch_app/core/zmode/zmode_ids.dart';
 import 'package:watch_app/core/zmode/zmode_source_prefs.dart';
 import 'package:watch_app/core/zmode/stream_probe.dart';
@@ -27,6 +29,7 @@ class _SweepSrc implements SourceRepository {
     this.aStreams = const [VideoSource(url: 'https://a/stream')],
     this.bStreams = const [VideoSource(url: 'https://b/stream')],
     this.hangs = const <String>{},
+    this.extraMisses = 0,
   });
 
   final List<Episode> aEps;
@@ -36,7 +39,9 @@ class _SweepSrc implements SourceRepository {
 
   /// Sources whose episode call never answers — a real one measured 38s.
   final Set<String> hangs;
+  final int extraMisses;
   final log = <String>[];
+  bool failAStreams = false;
 
   /// Every category this source was asked for.
   final cats = <String>[];
@@ -47,6 +52,7 @@ class _SweepSrc implements SourceRepository {
   @override
   List<({String id, String name})> get loadedSources => [
     (id: 'src-a', name: 'A'),
+    for (var i = 0; i < extraMisses; i++) (id: 'miss-$i', name: 'Miss $i'),
     (id: 'src-b', name: 'B'),
   ];
 
@@ -116,6 +122,7 @@ class _SweepSrc implements SourceRepository {
     bool fast = false,
   }) async {
     log.add('sources:$episodeUrl:$sourceId');
+    if (sourceId == 'src-a' && failAStreams) throw StateError('expired stream');
     if (sourceId == 'src-a') return aStreams;
     if (sourceId == 'src-b') return bStreams;
     return const [];
@@ -184,13 +191,276 @@ void main() {
       store: store,
       prefs: prefs,
       health: health,
-      candidates: (_) => [(id: 'src-a', name: 'A'), (id: 'src-b', name: 'B')],
+      candidates: (_) => sources.loadedSources,
       perSourceBudget: budget,
       scores: scores,
     );
     r.bindTitleLookup((_) async => (title: 'FMA', alt: null, malId: 100));
     return r;
   }
+
+  test(
+    'alternative streams are labelled and keep the active provider',
+    () async {
+      const episodes = [
+        Episode(id: '1', title: 'Ep 1', url: 'https://episode/1'),
+        Episode(id: '2', title: 'Ep 2', url: 'https://episode/2'),
+      ];
+      final source = _SweepSrc(aEps: episodes, bEps: episodes);
+      final matcher = SourceMatcher(
+        sources: source,
+        store: store,
+        prefs: prefs,
+        candidates: (_) => source.loadedSources,
+      );
+      final playback = resolver(
+        sources: source,
+        matcher: matcher,
+        preferred: 'src-a',
+      );
+      expect((await playback.sources(_ep2)).single.url, 'https://a/stream');
+      final results = await playback
+          .alternativeStreams(_ep2)
+          .expand((items) => items)
+          .toList();
+      expect(results.single.url, 'https://b/stream');
+      expect(results.single.label, 'src-b');
+      expect(playback.resolvedSourceId(_ep2), 'src-a');
+    },
+  );
+
+  test(
+    'a source selected in the episode sheet is reused for the chosen audio cut',
+    () async {
+      final source = _SweepSrc(aEps: const [], bEps: const []);
+      final matcher = SourceMatcher(
+        sources: source,
+        store: store,
+        prefs: prefs,
+        candidates: (_) => source.loadedSources,
+      );
+      final playback = resolver(sources: source, matcher: matcher);
+      await playback.useProbed(
+        _ep2,
+        const SourceProbe(
+          sourceId: 'src-b',
+          name: 'B',
+          episodeUrl: 'https://b/dub/2',
+          match: SourceMatch(
+            sourceId: 'src-b',
+            showId: 'fma',
+            showTitle: 'FMA',
+            showUrl: 'https://b/show',
+            pinned: false,
+          ),
+        ),
+        category: 'dub',
+      );
+      expect(playback.resolvedSourceId(_ep2, category: 'dub'), 'src-b');
+      expect(playback.resolvedSourceId(_ep2), isNull);
+      expect(
+        (await playback.sources(_ep2, fast: true, category: 'dub')).single.url,
+        'https://b/stream',
+      );
+      expect(source.log, ['sources:https://b/dub/2:src-b']);
+    },
+  );
+
+  test(
+    'numbered gaps cannot substitute episode four for episode two',
+    () async {
+      const show = ZCanonical(ZKind.tv, 'tmdb:42');
+      const url = 'zm://tv/tmdb:42/ep/2';
+      const first = Episode(
+        id: '1',
+        title: 'Episode 1',
+        url: 'https://episode/1',
+        number: 1,
+      );
+      final source = _SweepSrc(
+        aEps: const [
+          first,
+          Episode(
+            id: '4',
+            title: 'Episode 4',
+            url: 'https://episode/4',
+            number: 4,
+          ),
+        ],
+        bEps: const [
+          first,
+          Episode(
+            id: '2',
+            title: 'Episode 2',
+            url: 'https://episode/2',
+            number: 2,
+          ),
+        ],
+      );
+      final matcher = SourceMatcher(
+        sources: source,
+        store: store,
+        prefs: prefs,
+        candidates: (_) => source.loadedSources,
+      );
+      final playback = resolver(
+        sources: source,
+        matcher: matcher,
+        preferred: 'src-a',
+      );
+      for (final id in ['src-a', 'src-b']) {
+        await store.save(
+          show,
+          SourceMatch(
+            sourceId: id,
+            showTitle: 'FMA',
+            showId: 'show',
+            showUrl: 'https://$id/show',
+            pinned: false,
+          ),
+        );
+      }
+      expect(await playback.sourcesFrom(url, 'src-a'), isEmpty);
+      expect((await playback.sources(url)).single.url, 'https://b/stream');
+      expect(source.log, isNot(contains('sources:https://episode/4:src-a')));
+    },
+  );
+
+  test(
+    'TV resolver uses the exact season and episode even when rows are sparse',
+    () async {
+      const url = 'zm://tv/tmdb:42/ep/2';
+      final source = _SweepSrc(
+        aEps: const [
+          Episode(
+            id: 'S2E2',
+            title: 'Episode Two',
+            url: 'https://right/2',
+            number: 2,
+            season: 2,
+          ),
+          Episode(
+            id: 'S1E4',
+            title: 'Episode Four',
+            url: 'https://wrong/4',
+            number: 4,
+            season: 1,
+          ),
+        ],
+        bEps: const [],
+      );
+      final matcher = SourceMatcher(
+        sources: source,
+        store: store,
+        prefs: prefs,
+        candidates: (_) => source.loadedSources,
+      );
+      final playback = resolver(sources: source, matcher: matcher);
+      await store.pin(
+        const ZCanonical(ZKind.tv, 'tmdb:42'),
+        const SourceMatch(
+          sourceId: 'src-a',
+          showId: 'show',
+          showTitle: 'Test series',
+          showUrl: 'https://a/show',
+          pinned: true,
+        ),
+      );
+      playback.bindTvEpisodeLookup((_, __) async => (season: 2, number: 2));
+      await playback.sourcesFrom(url, 'src-a');
+      expect(source.log, contains('sources:https://right/2:src-a'));
+      expect(source.log, isNot(contains('sources:https://wrong/4:src-a')));
+    },
+  );
+
+  test(
+    'fast Play uses a ready stream while a higher-ranked source is stalled',
+    () async {
+      final source = _SweepSrc(
+        aEps: const [],
+        bEps: const [
+          Episode(id: '1', title: 'Ep 1', url: 'https://b/1'),
+          Episode(id: '2', title: 'Ep 2', url: 'https://b/2'),
+        ],
+        hangs: const {'src-a'},
+      );
+      final matcher = SourceMatcher(
+        sources: source,
+        store: store,
+        prefs: prefs,
+        candidates: (_) => source.loadedSources,
+      );
+      final playback = resolver(
+        sources: source,
+        matcher: matcher,
+        budget: const Duration(seconds: 2),
+      );
+      final streams = await playback
+          .sources(_ep2, fast: true)
+          .timeout(const Duration(milliseconds: 500));
+      expect(streams.single.url, 'https://b/stream');
+      expect(playback.resolvedSourceId(_ep2), 'src-b');
+    },
+  );
+
+  test(
+    'fast Play abandons a cached source that throws and registers its replacement',
+    () async {
+      const episodes = [
+        Episode(id: '1', title: 'Ep 1', url: 'https://episode/1'),
+        Episode(id: '2', title: 'Ep 2', url: 'https://episode/2'),
+      ];
+      final source = _SweepSrc(aEps: episodes, bEps: episodes);
+      final matcher = SourceMatcher(
+        sources: source,
+        store: store,
+        prefs: prefs,
+        candidates: (_) => source.loadedSources,
+      );
+      final playback = resolver(sources: source, matcher: matcher);
+      expect((await playback.resolveForPlayback(_ep2)).match.sourceId, 'src-a');
+      source.failAStreams = true;
+      final streams = await playback.sources(_ep2, fast: true);
+      expect(streams.single.url, 'https://b/stream');
+      expect(playback.resolvedSourceId(_ep2), 'src-b');
+    },
+  );
+
+  test(
+    'automatic Play reaches sources beyond the configured manual limit',
+    () async {
+      final order = await SourceOrderPrefs.open();
+      await order.setCap(_show.kind, 3);
+      sl.registerSingleton<SourceOrderPrefs>(order);
+      addTearDown(() => sl.unregister<SourceOrderPrefs>());
+
+      final source = _SweepSrc(
+        aEps: const [],
+        bEps: const [
+          Episode(id: '1', title: 'Ep 1', url: 'https://b/1'),
+          Episode(id: '2', title: 'Ep 2', url: 'https://b/2'),
+        ],
+        extraMisses: 8,
+        hangs: const {'src-a'},
+      );
+      final matcher = SourceMatcher(
+        sources: source,
+        store: store,
+        prefs: prefs,
+        candidates: (_) => source.loadedSources,
+      );
+      final playback = resolver(
+        sources: source,
+        matcher: matcher,
+        budget: const Duration(seconds: 2),
+      );
+      final streams = await playback
+          .sources(_ep2, fast: true)
+          .timeout(const Duration(milliseconds: 600));
+      expect(streams.single.url, 'https://b/stream');
+      expect(playback.resolvedSourceId(_ep2), 'src-b');
+    },
+  );
 
   test('switching a title\'s source drops its cached winners', () async {
     // The reported bug: play an episode, change source, press play — and the
@@ -685,10 +955,12 @@ void main() {
 
     final full = await r.probeEach(_ep2).where((p) => !p.checking).toList();
     expect(full.length, 2, reason: 'with time, every candidate is asked');
-    // The probe answers "has the episode" WITHOUT resolving streams — that is
-    // the expensive half, and it measured 3-13s per source on device.
-    expect(src.log.where((l) => l.startsWith('sources:')), isEmpty);
+    // Auto Find now also probes the links before reporting a hit, so resolving
+    // streams is expected here (with a short per-source budget). The trust fake
+    // stands in for a live link check in this unit test.
+    expect(src.log.where((l) => l.startsWith('sources:')), isNotEmpty);
     expect(full.every((p) => p.hasEpisode), isTrue);
+    expect(full.every((p) => p.playable), isTrue);
 
     // …and `skip` resumes past one rather than asking it again.
     final rest = await r

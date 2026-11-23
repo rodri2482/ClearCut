@@ -20,6 +20,36 @@ import androidx.media3.exoplayer.LoadControl
  */
 @UnstableApi
 object BufferPresets {
+    private const val MIB = 1024L * 1024L
+
+    fun phoneLoadControl(
+        minBufferMs: Int,
+        maxBufferMs: Int,
+        targetBufferBytes: Int,
+        backBufferMs: Int,
+        maxHeapBytes: Long,
+        usedHeapBytes: Long,
+    ): LoadControl {
+        // The codec, Flutter engine and extension hosts also allocate in this
+        // heap. Limit read-ahead by current headroom as well as the heap class.
+        val headroom = (maxHeapBytes - usedHeapBytes).coerceAtLeast(0L)
+        val safeBytes = minOf(maxHeapBytes / 8, headroom / 4, 48 * MIB)
+            .coerceAtLeast(4 * MIB).toInt()
+        val maxMs = if (maxBufferMs > 0) minOf(maxBufferMs, 30_000) else 30_000
+        val backMs = if (maxHeapBytes <= 256 * MIB || headroom < 96 * MIB) {
+            0
+        } else {
+            minOf(backBufferMs, 5_000)
+        }
+        return loadControl(
+            minBufferMs = if (minBufferMs > 0) minOf(minBufferMs, maxMs) else maxMs,
+            maxBufferMs = maxMs,
+            targetBufferBytes = if (targetBufferBytes > 0) minOf(targetBufferBytes, safeBytes) else safeBytes,
+            backBufferMs = backMs,
+            maxHeapBytes = maxHeapBytes,
+        )
+    }
+
     fun loadControl(
         minBufferMs: Int,
         maxBufferMs: Int,

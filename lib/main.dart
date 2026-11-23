@@ -24,6 +24,8 @@ import 'core/ui/splash_style.dart';
 import 'core/hive/safe_box.dart';
 import 'core/discord/discord_rpc.dart';
 import 'core/environment.dart';
+import 'core/share/last_playback.dart';
+import 'core/share/open_link_service.dart';
 import 'core/supabase/auth_route.dart';
 import 'features/auth/auth_connection_screen.dart';
 import 'core/stremio/stremio_sync.dart';
@@ -238,7 +240,7 @@ Future<void> main() async {
       // When the probe says offline, boot stays local-only; the retry loop,
       // resume sync, and lock-status cache cover the reconnect.
       final bootOffline = await probeBootOffline(
-        host: Uri.tryParse(Environment.vpsSyncUrl)?.host ?? '',
+        host: Uri.tryParse(Environment.cloudSyncUrl)?.host ?? '',
       );
       final authDecision = await authRouteFuture;
       AuthRoute.active = authDecision.route;
@@ -897,7 +899,26 @@ class _WatchAppState extends State<WatchApp> with WidgetsBindingObserver {
     // The shell is up, so a link held since boot can finally navigate without
     // the pushReplacement above throwing its route away.
     markAppShellReady();
+    _restoreLastPlaybackIfAny();
     if (mounted) setState(() {});
+  }
+
+  /// If the native player (or the whole process) died while someone was
+  /// watching, a cold start used to land on Home with no trace of the title.
+  /// Reopen the last playback target through the ordinary share-link handler.
+  void _restoreLastPlaybackIfAny() {
+    if (isAppleTv) return;
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 1200), () async {
+        if (!sl.isRegistered<OpenLinkService>()) return;
+        final links = sl<OpenLinkService>();
+        if (links.handledLink) return;
+        final link = await LastPlayback.takeFresh();
+        if (link == null || links.handledLink) return;
+        final uri = Uri.tryParse(link);
+        if (uri != null) links.open(uri);
+      }),
+    );
   }
 
   Widget _buildHome() {

@@ -1,19 +1,22 @@
-import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
-import '../app_config.dart';
+import '../environment.dart';
 import 'profile_avatar_reference.dart';
 
-/// Uploads a profile photo through the intake Worker (`cloudflare/log-intake/`,
-/// `POST /v1/avatar-slot`), which stores the bytes in R2 and returns the
-/// public URL. Never throws: any failure reads as null and the editor keeps
-/// the icon, mirroring `LogReportService.send`.
+/// Stores account-owned profile photos and covers in Supabase Storage.
 class ProfileAvatarUploader {
-  ProfileAvatarUploader(this._dio);
+  ProfileAvatarUploader(
+    this._dio, {
+    required String? Function() currentUserId,
+    String projectUrl = Environment.supabaseUrl,
+    String publishableKey = Environment.supabaseAnonKey,
+  }) : _currentUserId = currentUserId,
+       _project = Uri.tryParse(projectUrl),
+       _publishableKey = publishableKey;
 
   static const int maxAvatarBytes = 512 * 1024;
   static const int maxGifAvatarBytes = 1024 * 1024;
@@ -27,6 +30,57 @@ class ProfileAvatarUploader {
   static const int maxGifSourcePixels = 20 * 1024 * 1024;
 
   final Dio _dio;
+  final String? Function() _currentUserId;
+  final Uri? _project;
+  final String _publishableKey;
+
+  static final _ownerId = RegExp(r'^[a-zA-Z0-9-]+$');
+  static final _fileName = RegExp(
+    r'^clearcut-profile-[0-9]+-[0-9]+\.(jpg|png|webp|gif)$',
+  );
+
+  /// False when this build has no Supabase project compiled in. The caller can
+  /// then say "photos stay on this device" instead of a silent no-op that looks
+  /// like a failed upload.
+  bool get configured =>
+      _objectUri(public: true, path: const ['configured']) != null;
+
+  Uri? _objectUri({required bool public, required List<String> path}) {
+    final project = _project;
+    if (project == null ||
+        project.scheme != 'https' ||
+        project.host.isEmpty ||
+        project.host == 'offline.invalid' ||
+        project.userInfo.isNotEmpty ||
+        project.hasQuery ||
+        project.hasFragment ||
+        _publishableKey.isEmpty ||
+        _publishableKey == 'disabled') {
+      return null;
+    }
+    return project.replace(
+      pathSegments: [
+        ...project.pathSegments.where((segment) => segment.isNotEmpty),
+        'storage',
+        'v1',
+        'object',
+        if (public) 'public',
+        Environment.avatarsBucketId,
+        ...path,
+      ],
+    );
+  }
+
+  Options _options(String token, {Map<String, Object>? headers}) => Options(
+    headers: {
+      'apikey': _publishableKey,
+      'Authorization': 'Bearer $token',
+      ...?headers,
+    },
+    followRedirects: false,
+    sendTimeout: const Duration(seconds: 30),
+    receiveTimeout: const Duration(seconds: 30),
+  );
 
   static bool isAllowedGif(Uint8List bytes) {
     if (bytes.isEmpty || bytes.lengthInBytes > maxGifAvatarBytes) return false;
@@ -52,27 +106,50 @@ class ProfileAvatarUploader {
     required String token,
     required _AvatarUpload? Function(Uint8List) prepare,
   }) async {
+    final owner = _currentUserId();
+    if (owner == null || !_ownerId.hasMatch(owner) || token.isEmpty) {
+      return null;
+    }
     try {
       final avatar = await compute<Uint8List, _AvatarUpload?>(
         prepare,
         bytes,
         debugLabel: 'compress profile image',
       );
-      if (avatar == null) return null;
-      final res = await _dio.post<dynamic>(
-        '$kLogIntakeUrl/v1/avatar-slot',
-        data: Stream<List<int>>.fromIterable([avatar.bytes]),
-        options: Options(
+      if (avatar == null || _currentUserId() != owner) return null;
+      final extension = switch (avatar.contentType) {
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+        'image/gif' => 'gif',
+        _ => 'jpg',
+      };
+      final suffix = math.Random.secure().nextInt(0x7fffffff);
+      final name =
+          'clearcut-profile-${DateTime.now().microsecondsSinceEpoch}-$suffix.$extension';
+      final path = [owner, name];
+      final upload = _objectUri(public: false, path: path);
+      final read = _objectUri(public: true, path: path);
+      if (upload == null || read == null) return null;
+
+      await _dio.postUri<dynamic>(
+        upload,
+        data: Stream<List<int>>.value(avatar.bytes),
+        options: _options(
+          token,
           headers: {
             Headers.contentTypeHeader: avatar.contentType,
             Headers.contentLengthHeader: avatar.bytes.length,
-            'Authorization': 'Bearer $token',
+            'cache-control': 'max-age=3600',
+            'x-upsert': 'false',
           },
-          sendTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(seconds: 30),
         ),
       );
-      return urlOf(res.data);
+      return read.toString();
+    } on DioException catch (error) {
+      debugPrint(
+        '[profile-media] upload failed (${error.response?.statusCode ?? error.type.name})',
+      );
+      return null;
     } catch (_) {
       return null;
     }
@@ -80,41 +157,35 @@ class ProfileAvatarUploader {
 
   Future<bool> delete({required String url, required String token}) async {
     if (isKlipyAvatarReference(url) || isKlipyAvatarMediaUrl(url)) return true;
+    final owner = _currentUserId();
+    final uri = Uri.tryParse(url);
+    if (owner == null ||
+        !_ownerId.hasMatch(owner) ||
+        uri == null ||
+        token.isEmpty) {
+      return false;
+    }
+    final name = uri.pathSegments.lastOrNull;
+    if (name == null || !_fileName.hasMatch(name)) return false;
+    final publicUrl = _objectUri(public: true, path: [owner, name]);
+    final destination = _objectUri(public: false, path: []);
+    if (destination == null || uri != publicUrl) return false;
+
     try {
-      await _dio.delete<void>(
-        '$kLogIntakeUrl/v1/avatar-slot',
-        data: {'url': url},
-        options: Options(
-          headers: {'Authorization': 'Bearer $token'},
-          sendTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(seconds: 30),
+      await _dio.deleteUri<dynamic>(
+        destination,
+        data: {
+          'prefixes': ['$owner/$name'],
+        },
+        options: _options(
+          token,
+          headers: {Headers.contentTypeHeader: 'application/json'},
         ),
       );
       return true;
     } catch (_) {
       return false;
     }
-  }
-
-  /// The public URL out of the Worker's reply, or null if it answered with
-  /// anything else (a 401 JSON, a proxy login page, junk).
-  @visibleForTesting
-  static String? urlOf(dynamic data) {
-    Map<dynamic, dynamic>? map;
-    if (data is Map) {
-      map = data;
-    } else if (data is String) {
-      try {
-        final decoded = jsonDecode(data);
-        if (decoded is Map) map = decoded;
-      } catch (_) {
-        return null;
-      }
-    }
-    final url = map?['url'];
-    if (url is! String) return null;
-    final trimmed = url.trim();
-    return trimmed.startsWith('https://') ? trimmed : null;
   }
 }
 

@@ -3,7 +3,6 @@ import '../../core/app_config.dart';
 import 'dart:typed_data';
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../../core/ui/settings_widgets.dart';
@@ -416,16 +415,24 @@ class _ProfileAccountSectionState extends State<ProfileAccountSection> {
         return;
       }
     } else {
-      final x = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
-        maxWidth: ProfileAvatarUploader.maxAvatarDimension.toDouble(),
-        maxHeight: ProfileAvatarUploader.maxAvatarDimension.toDouble(),
-        imageQuality: 100,
-      );
-      if (x == null || !context.mounted) return;
-      bytes = await x.readAsBytes();
+      try {
+        final file = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+          maxWidth: ProfileAvatarUploader.maxAvatarDimension.toDouble(),
+          maxHeight: ProfileAvatarUploader.maxAvatarDimension.toDouble(),
+          imageQuality: 100,
+        );
+        if (file == null || !context.mounted) return;
+        bytes = await file.readAsBytes();
+      } catch (_) {
+        if (context.mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            const SnackBar(content: Text('Could not read that photo.')),
+          );
+        }
+        return;
+      }
     }
-
     if (!context.mounted) return;
     await _uploadAccountAvatar(context, bytes);
   }
@@ -447,8 +454,22 @@ class _ProfileAccountSectionState extends State<ProfileAccountSection> {
       return;
     }
 
+    final uploader = sl<ProfileAvatarUploader>();
+    if (!uploader.configured) {
+      // A stock APK has no backend compiled in; say so plainly instead of
+      // letting a no-op upload fail into a generic "couldn't update photo".
+      if (context.mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Photo uploads need a cloud build. This photo stays on your device.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
     setState(() => _avatarUploading = true);
-    final uploader = ProfileAvatarUploader(sl<Dio>());
     String? uploadedUrl;
     var savedLocally = false;
     try {
@@ -470,7 +491,8 @@ class _ProfileAccountSectionState extends State<ProfileAccountSection> {
           profile.photoUrl != uploadedUrl &&
           !profiles.profiles.any(
             (other) =>
-                other.id != profile.id && other.photoUrl == profile.photoUrl,
+                other.photoUrl == profile.photoUrl ||
+                other.coverUrl == profile.photoUrl,
           )) {
         await uploader.delete(url: profile.photoUrl!, token: token);
       }

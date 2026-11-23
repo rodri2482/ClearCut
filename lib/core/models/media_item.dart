@@ -69,6 +69,9 @@ class MediaItem extends Equatable {
   final int? tmdbId;
   final bool tmdbIsTv;
 
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  final bool? isTvListing;
+
   /// IMDb id (e.g. `tt1234567`) for Simkl tracking when no TMDB id is exposed.
   final String? imdbId;
 
@@ -146,6 +149,7 @@ class MediaItem extends Equatable {
     this.anilistId,
     this.tmdbId,
     this.tmdbIsTv = false,
+    this.isTvListing,
     this.imdbId,
     this.genres = const [],
     this.status,
@@ -191,6 +195,7 @@ class MediaItem extends Equatable {
     anilistId: anilistId ?? this.anilistId,
     tmdbId: tmdbId ?? this.tmdbId,
     tmdbIsTv: tmdbIsTv,
+    isTvListing: isTvListing,
     imdbId: imdbId ?? this.imdbId,
     savedFrom: savedFrom ?? this.savedFrom,
     savedAtMs: savedAtMs ?? this.savedAtMs,
@@ -226,6 +231,7 @@ class MediaItem extends Equatable {
     anilistId,
     tmdbId,
     tmdbIsTv,
+    isTvListing,
     imdbId,
     genres,
     status,

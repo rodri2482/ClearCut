@@ -562,7 +562,8 @@ class ReadHistory {
   /// rationale. Additive, never deletes.
   Future<({int pushed, int failed})> pushAllLocalToCloud() async {
     final uid = _currentUserId();
-    if (uid == null) return (pushed: 0, failed: 0);
+    // No account means the push did not happen; do not report success.
+    if (uid == null) return (pushed: 0, failed: 1);
     final profileId = _profileId;
     final cloudTimes = <String, int>{};
     var readOk = true;

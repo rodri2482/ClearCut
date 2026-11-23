@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/di/injector.dart';
+import '../../core/environment.dart';
 import '../../core/share/pair_link.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text.dart';
@@ -161,20 +162,19 @@ class _TvTrackerConnectScreenState extends State<TvTrackerConnectScreen> {
                         title: context.l10n.haveTheApp,
                         subtitle: context.l10n.openZangetsuOnYourNphoneAndScan,
                       ),
-                      const SizedBox(width: 36),
-                      // QR 2 — no app needed. Opens a web page that runs the
-                      // $_label login in the phone's browser and relays the token
-                      // to this TV (same encrypted-blob path the poll consumes).
-                      _qrOption(
-                        data: PairLink.trackerWebLink(
-                          code: _code!,
-                          nonce: _nonce!,
-                          tracker: widget.trackerId,
+                      if (Environment.siteBaseUri != null) ...[
+                        const SizedBox(width: 36),
+                        _qrOption(
+                          data: PairLink.trackerWebLink(
+                            code: _code!,
+                            nonce: _nonce!,
+                            tracker: widget.trackerId,
+                          ),
+                          title: context.l10n.noApp,
+                          subtitle:
+                              'Scan to log in with\n$_label in your browser',
                         ),
-                        title: context.l10n.noApp,
-                        subtitle:
-                            'Scan to log in with\n$_label in your browser',
-                      ),
+                      ],
                     ],
                   ),
                   if (_error != null) ...[

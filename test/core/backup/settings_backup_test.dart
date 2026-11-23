@@ -130,6 +130,11 @@ void _driftGuard() {
       // Icon URLs picked back up the next time a repo index is read.
       'source_icons': 'cache',
       'source_health': 'transient',
+      'host_mirrors': 'derived mirror list, rediscovered from sources',
+      'local_title_index': 'derived title index, rebuilt from the library',
+      'search_result_cache': 'cache',
+      'stremio_home_cache': 'cache',
+      'zmode_episode_anchors': 'derived episode anchors, rebuilt from use',
       'zmode_source_score': 'derived play counts, rebuilt from use',
       'updates': 'transient',
       'announcements': 'transient',

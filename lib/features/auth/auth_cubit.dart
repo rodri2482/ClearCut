@@ -8,6 +8,7 @@ import 'package:hive/hive.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'
     show AuthException, UserAttributes;
 
+import '../../core/environment.dart';
 import '../../core/supabase/auth_user.dart';
 import '../../core/supabase/supabase_service.dart';
 
@@ -406,7 +407,7 @@ class AuthCubit extends Cubit<AuthState> {
         // Without this, Supabase sends the confirmation link to its default
         // Site URL (http://localhost:3000). The app's own scheme brings the
         // viewer straight back here with the session in the callback URI.
-        emailRedirectTo: 'zangetsu://open',
+        emailRedirectTo: Environment.openLinkUrl,
       );
       // Autoconfirm returns a session and sets `currentUser`; email
       // confirmation returns just the user. Use BOTH so neither project
@@ -467,7 +468,7 @@ class AuthCubit extends Cubit<AuthState> {
     try {
       await _sb.client.auth.resetPasswordForEmail(
         email,
-        redirectTo: 'zangetsu://open',
+        redirectTo: Environment.openLinkUrl,
       );
       return null;
     } on AuthException catch (e) {

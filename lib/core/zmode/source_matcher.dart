@@ -53,6 +53,7 @@ class SourceMatcher {
     required ZSourcePrefs prefs,
     required List<({String id, String name})> Function(ZKind) candidates,
     List<({String id, String name})> Function(ZKind)? sweepCandidates,
+    this.videoSearchConcurrency = 1,
   }) : _sources = sources,
        _store = store,
        _prefs = prefs,
@@ -60,6 +61,7 @@ class SourceMatcher {
        _sweepCandidates = sweepCandidates ?? candidates;
 
   final SourceRepository _sources;
+  final int videoSearchConcurrency;
   final MatchStore _store;
   final ZSourcePrefs _prefs;
   final List<({String id, String name})> Function(ZKind) _candidates;
@@ -141,12 +143,28 @@ class SourceMatcher {
       try {
         final results = await _sources.search(q, sourceId: sourceId);
         if (abandoned?.call() ?? false) return null;
+        if (c.kind == ZKind.movie || c.kind == ZKind.tv) {
+          final tv = c.kind == ZKind.tv;
+          final expected = c.id.startsWith('tmdb:')
+              ? int.tryParse(c.id.substring('tmdb:'.length))
+              : null;
+          return [
+            for (final item in results)
+              if (item.type == ProviderType.movie &&
+                  (item.isTvListing == null || item.isTvListing == tv) &&
+                  (!item.tmdbIsTv || tv) &&
+                  (item.tmdbId == null ||
+                      (item.tmdbIsTv == tv &&
+                          (expected == null || item.tmdbId == expected))) &&
+                  (sourceId != 'clearcut_framextv' ||
+                      (expected != null && item.tmdbId == expected)))
+                item,
+          ];
+        }
         if (sourceId != 'clearcut_framextv') return results;
         // This source supplies catalogue IDs. Do not rely on title similarity
         // when the same movie title has a remake, anime or TV adaptation.
         final expected = switch (c.kind) {
-          ZKind.movie ||
-          ZKind.tv => int.tryParse(c.id.replaceFirst('tmdb:', '')),
           ZKind.anime when c.id.startsWith('al:') => int.tryParse(
             c.id.substring(3),
           ),
@@ -161,8 +179,6 @@ class SourceMatcher {
         }
         return results.where((item) {
           return switch (c.kind) {
-            ZKind.movie => item.tmdbId == expected && !item.tmdbIsTv,
-            ZKind.tv => item.tmdbId == expected && item.tmdbIsTv,
             ZKind.anime => item.anilistId == expected,
             _ => false,
           };
@@ -262,11 +278,12 @@ class SourceMatcher {
     final found = hit!;
     debugPrint('[zmode] $sourceId MATCHED "$title" -> "${found.title}"');
     final m = SourceMatch(
-      sourceId: found.sourceId,
+      sourceId: sourceId,
       showUrl: found.url,
       showId: found.id,
       showTitle: found.title,
       pinned: false,
+      identityChecked: true,
     );
     if (abandoned?.call() ?? false) return null;
     await _store.save(c, m);
@@ -335,22 +352,28 @@ class SourceMatcher {
       // An explicit per-title pin or kind-wide default is a deliberate
       // choice — keep honouring it even if the source's own title text is
       // abbreviated. Only auto-resolved guesses get re-validated.
-      final explicitChoice = saved.pinned || sourceForTitle(c) != null;
+      final needsIdentityCheck =
+          !saved.identityChecked &&
+          (c.kind == ZKind.tv || c.kind == ZKind.movie) &&
+          (sourceId.startsWith('cs:') || sourceId == 'clearcut_framextv');
+      final explicitChoice =
+          saved.pinned || (!needsIdentityCheck && sourceForTitle(c) != null);
       final stillRight =
           explicitChoice ||
-          titleMatches(
-            MediaItem(
-              id: saved.showId,
-              title: saved.showTitle,
-              url: saved.showUrl,
-              type: ProviderType.movie,
-              sourceId: saved.sourceId,
-            ),
-            title,
-            altTitle: altTitle,
-            metadataAliases: metadataAliases,
-            wantedMalId: malId,
-          );
+          (!needsIdentityCheck &&
+              titleMatches(
+                MediaItem(
+                  id: saved.showId,
+                  title: saved.showTitle,
+                  url: saved.showUrl,
+                  type: ProviderType.movie,
+                  sourceId: saved.sourceId,
+                ),
+                title,
+                altTitle: altTitle,
+                metadataAliases: metadataAliases,
+                wantedMalId: malId,
+              ));
       if (stillRight) {
         // Even with a cached match, the runtime may be empty on TV — ensure
         // the provider is loaded so episodes()/sources() can resolve.
@@ -564,6 +587,59 @@ class SourceMatcher {
       );
     }
 
+    if (!isReading && videoSearchConcurrency > 1) {
+      var finished = false;
+      bool stopped() => finished || (abandoned?.call() ?? false);
+      final pending = <int, Future<SourceMatch?>>{};
+      var next = 0;
+
+      void fill() {
+        while (pending.length < videoSearchConcurrency &&
+            next < sweep.length &&
+            !stopped()) {
+          final index = next++;
+          final source = sweep[index];
+          onProgress?.call(source.name, index + 1, sweep.length);
+          if (stopped()) return;
+          var timedOut = false;
+          pending[index] =
+              matchOn(
+                    c,
+                    source.id,
+                    title: title,
+                    altTitle: altTitle,
+                    metadataAliases: metadataAliases,
+                    malId: malId,
+                    abandoned: () => timedOut || stopped(),
+                  )
+                  .timeout(
+                    const Duration(seconds: 12),
+                    onTimeout: () {
+                      timedOut = true;
+                      return null;
+                    },
+                  )
+                  .catchError((Object _) => null);
+        }
+      }
+
+      fill();
+      while (pending.isNotEmpty && !stopped()) {
+        final result = await Future.any([
+          for (final entry in pending.entries)
+            entry.value.then((match) => (index: entry.key, match: match)),
+        ]);
+        pending.remove(result.index);
+        if (stopped()) break;
+        if (result.match != null) {
+          finished = true;
+          return result.match;
+        }
+        fill();
+      }
+      finished = true;
+      return null;
+    }
     // Auto Resolve — the true default until the user pins a title or sets a
     // kind default by hand: sweep every candidate, in the user's saved
     // priority order, and take the first genuine hit.

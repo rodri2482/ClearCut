@@ -5,6 +5,11 @@ var SOURCE_ID = 'clearcut_framextv';
 var serverLists = new Map();
 var fullResolves = new Map();
 var recentDefaults = new Map();
+// ClearCut runs provider JS on one serialized lane with a ~5s per-source
+// budget, so a resolve must come back inside it. Without these the full
+// (Sources-menu) path took 11.5s on a real title and was cut off as a miss.
+var RESOLVE_DEADLINE_MS = 4200;
+var MAX_EXTRA_SERVERS = 12;
 var ROWS = [
   ['trending_movies', 'Trending movies', '/api/trending', {type: 'movie'}],
   ['popular_movies', 'Popular movies'],
@@ -301,6 +306,7 @@ function uniqueSources(sources) {
 }
 
 function getVideoSources(url, fast) {
+  var startedAt = Date.now();
   var ref = parseRef(url);
   if (ref.type === 'tv' && !ref.episode) return [];
   var anime = ref.type === 'anime';
@@ -318,7 +324,7 @@ function getVideoSources(url, fast) {
   var recent = recentDefaults.get(url);
   var defaultStream = !fast && recent && recent.expires > Date.now()
     ? Promise.resolve(recent.data)
-    : json(streamPath, params, 6500, true).catch(function () { return {}; });
+    : json(streamPath, params, 2500, true).catch(function () { return {}; });
   var servers = fast ? null : Promise.all([
     availableServers(providersPath, params),
     anime ? availableServers(providersPath, {...params, sub_type: 'dub'}) : [],
@@ -342,13 +348,20 @@ function getVideoSources(url, fast) {
         return typeof id === 'string' && /^[a-z0-9_-]+$/i.test(id) &&
           (!sources.length || id !== data.provider);
       });
-    // Bound network concurrency. The fast path expands only when the default
-    // supplied no native link, and stops as soon as a batch returns one.
+    // Bound network concurrency AND total time. ClearCut asks a JS provider on
+    // a serialized lane with a ~5s budget; an unbounded fan-out here measured
+    // 11.5s on a real title, which made the source look unreachable (and froze
+    // out every JS source queued behind it). Extra servers are capped and the
+    // loop stops at the deadline, returning whatever already resolved.
+    ids = ids.slice(0, MAX_EXTRA_SERVERS);
     for (var offset = 0; offset < ids.length; offset += 6) {
+      var remaining = RESOLVE_DEADLINE_MS - (Date.now() - startedAt);
+      if (remaining < 700) break;
+      var batchMs = Math.min(3000, remaining);
       var results = await Promise.all(ids.slice(offset, offset + 6).map(function (id) {
         var server = byId.get(id) || {id: id};
         var query = anime && server.audio === 'dub' ? {...params, sub_type: 'dub'} : params;
-        return json(streamPath, {...query, provider: id}, 4500)
+        return json(streamPath, {...query, provider: id}, batchMs)
           .then(function (result) { return nativeSources(result, server); })
           .catch(function () { return []; });
       }));

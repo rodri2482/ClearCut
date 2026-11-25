@@ -122,12 +122,52 @@ class PluginHost(private val context: Context) {
         response
     }
 
+    /**
+     * The Context plugins are handed. It exists so extension chatter stays out
+     * of the viewer's way: plugins call `showToast`/`startActivity` for
+     * subscription promos, "Opening Comic Reader…" and verification screens,
+     * which used to pop over the video player.
+     *
+     * Suppressing `startActivity` outright, though, also killed the
+     * Cloudflare solver WebView some sources need before they return any
+     * links at all — those sources simply stopped resolving. So the intent is
+     * only dropped while the player is on screen; anywhere else in the app it
+     * goes to the live activity.
+     */
     private val extensionContext = object : android.content.ContextWrapper(context) {
         override fun getApplicationContext(): Context = this
-        override fun startActivity(intent: android.content.Intent) = Unit
-        override fun startActivity(intent: android.content.Intent, options: android.os.Bundle?) = Unit
-        override fun startActivities(intents: Array<out android.content.Intent>) = Unit
-        override fun startActivities(intents: Array<out android.content.Intent>, options: android.os.Bundle?) = Unit
+
+        override fun startActivity(intent: android.content.Intent) {
+            if (!routeToActivity(intent, null)) super.startActivity(intent)
+        }
+
+        override fun startActivity(intent: android.content.Intent, options: android.os.Bundle?) {
+            if (!routeToActivity(intent, options)) super.startActivity(intent, options)
+        }
+
+        override fun startActivities(intents: Array<out android.content.Intent>) {
+            intents.forEach { startActivity(it) }
+        }
+
+        override fun startActivities(
+            intents: Array<out android.content.Intent>,
+            options: android.os.Bundle?
+        ) {
+            intents.forEach { startActivity(it, options) }
+        }
+
+        private fun routeToActivity(
+            intent: android.content.Intent,
+            options: android.os.Bundle?
+        ): Boolean {
+            if (com.spyou.watch_app.PhonePlayerActivity.playerVisible) return true
+            val act = com.spyou.watch_app.MainActivity.current?.get()
+                as? android.app.Activity ?: return false
+            return runCatching {
+                if (options == null) act.startActivity(intent)
+                else act.startActivity(intent, options)
+            }.isSuccess
+        }
     }
 
     init {
@@ -217,13 +257,23 @@ class PluginHost(private val context: Context) {
         }
     }
 
+    /** The Context a plugin is loaded with — the live MainActivity (which IS an
+     *  AppCompatActivity) when there is one, otherwise the extension context.
+     *
+     *  This decides whether a plugin registers at all: several cast their load
+     *  context to AppCompatActivity inside `load()`, and against an Application
+     *  context that cast throws before the source is registered, so the whole
+     *  source silently disappears from the app. */
+    private fun loadContext(): Context =
+        com.spyou.watch_app.MainActivity.current?.get() ?: extensionContext
+
     /**
-     * @param loadCtx the Context handed to the plugin's `load()`. Defaults to the
-     *   application context (the long-standing behaviour). CsPluginLoaderActivity
-     *   passes itself (an AppCompatActivity) to satisfy plugins that cast the load
-     *   context — the classloader parent stays the app either way.
+     * @param loadCtx the Context handed to the plugin's `load()`. Defaults to
+     *   the live activity via [loadContext]; background loads (no activity)
+     *   fall back to the extension context. CsPluginLoaderActivity still passes
+     *   itself for callers that want a guaranteed AppCompatActivity.
      */
-    fun loadPlugin(file: File, loadCtx: Context = extensionContext): Boolean {
+    fun loadPlugin(file: File, loadCtx: Context = loadContext()): Boolean {
         if (loaded.contains(file.absolutePath)) return true
         return try {
             // Android 8+ refuses to load a dex/.cs3 the app can WRITE to (W^X

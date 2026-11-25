@@ -12,6 +12,11 @@ globalThis.__fetch = async function (src, u, opts) {
     { 'User-Agent': 'Mozilla/5.0 Chrome/120.0', Accept: '*/*' },
     opts.headers || {});
   const init = { method: opts.method || 'GET', headers, body: opts.body };
+  // Mirrors the Dart fetch handler, which applies payload.timeoutMs. Without it
+  // here, a provider's own timeouts look ineffective in a live run.
+  if (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) {
+    init.signal = AbortSignal.timeout(opts.timeoutMs);
+  }
   if (opts.followRedirects === false) init.redirect = 'manual';
   const r = await fetch(u, init);
   const text = await r.text();

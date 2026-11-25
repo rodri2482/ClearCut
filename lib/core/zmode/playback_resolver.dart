@@ -7,6 +7,7 @@ import '../models/video_source.dart';
 import '../playback/source_health_store.dart';
 import '../playback/stream_enrichment.dart';
 import '../di/injector.dart';
+import '../provider/bundled_sources.dart';
 import '../provider/cf_solve_needed.dart';
 import '../provider/cloudstream_provider.dart';
 import '../provider/js_engine.dart';
@@ -394,7 +395,12 @@ class PlaybackResolver {
   /// results (see its `record`). This is a playback-only, session-only memory
   /// with its own short cooldown, so nothing about search changes.
   final Map<String, DateTime> _overBudget = {};
-  static const Duration overBudgetCooldown = Duration(minutes: 10);
+
+  /// A source that blew one probe budget used to be shelved for TEN MINUTES,
+  /// which on a large library read as "the app never asks this source again".
+  /// Ninety seconds still protects the runtime from a genuinely dead provider
+  /// while letting a source that was merely slow come back on the next search.
+  static const Duration overBudgetCooldown = Duration(seconds: 90);
 
   /// Sources whose links were handed over and then would not play, per
   /// `zm://…|category`. A source can answer a sweep perfectly and still be
@@ -1830,11 +1836,12 @@ class PlaybackResolver {
         var playable = false;
         if (srcEp != null && match != null && !timedOut && !full()) {
           try {
-            final streams = await _sources.sources(
-              srcEp.url,
-              sourceId: match.sourceId,
-              fast: true,
-            );
+            // Bounded too: this runs on the serialized JS lane, so an
+            // unbounded source lookup here would stall every JS source behind
+            // this one — the exact thing that made sources look unreachable.
+            final streams = await _sources
+                .sources(srcEp.url, sourceId: match.sourceId, fast: true)
+                .timeout(probeBudget);
             if (streams.isNotEmpty) {
               final live = await _probe
                   .liveStreams(
@@ -1842,7 +1849,9 @@ class PlaybackResolver {
                     budget: anchorProbeBudget,
                     firstHitGrace: fastFirstHitGrace,
                   )
-                  .timeout(anchorProbeBudget + const Duration(milliseconds: 750));
+                  .timeout(
+                    anchorProbeBudget + const Duration(milliseconds: 750),
+                  );
               playable = live.isNotEmpty;
             }
           } on TimeoutException {
@@ -1883,10 +1892,21 @@ class PlaybackResolver {
       // The two lanes run together, so a slow JS provider no longer holds up
       // twenty native ones behind it.
       final native = <String>[];
-      final js = <String>[];
+      var js = <String>[];
       for (final id in all) {
         (_isNativeSource(id) ? native : js).add(id);
       }
+      // The JS lane is serialized, so whoever is at the front of it decides how
+      // much of the pass ever happens. Bundled sources answer in a few hundred
+      // milliseconds, so they go first: a stalled third-party provider can then
+      // no longer starve FrameXTV (and everything else) out of the survey.
+      // This changes only the ORDER OF ASKING, never which source wins —
+      // playback still follows the viewer's Source Priority.
+      final bundled = bundledSourceIds();
+      js = [
+        ...js.where((id) => bundled.contains(id)),
+        ...js.where((id) => !bundled.contains(id)),
+      ];
 
       // Workers pulling from a shared queue, NOT batches of five: a batch is
       // only as fast as its slowest member, so one source sitting on its whole
@@ -1906,27 +1926,34 @@ class PlaybackResolver {
           Future.wait([for (var i = 0; i < 5; i++) nativeWorker()]);
 
       Future<void> jsLane() async {
+        var consecutiveTimeouts = 0;
         for (final id in js) {
           if (full()) return;
           final timedOut = await probeOne(id);
-          // ONE timeout ends this lane for the pass.
-          //
           // `.timeout()` abandons the WAIT, not the work: a JS call that blew
           // its budget is still running on the shared runtime, so the next JS
           // probe queues behind it and burns its own budget waiting for a
           // runtime that is still busy. Measured on device: animekai timed out
-          // at 5.001s and hianime timed out at 5.001s immediately after —
-          // ten seconds to learn nothing, from a source that had answered in
-          // 620ms earlier in the same session.
+          // at 5.001s and hianime timed out at 5.001s immediately after.
           //
-          // The remaining JS sources are left UNASKED rather than reported as
-          // misses, and "Keep checking" retries them once the runtime is free.
+          // ONE timeout used to end the whole lane. With 140+ installed sources
+          // that meant a single bad provider left every JS source behind it
+          // permanently unasked — the reported "the app doesn't reach FrameXTV
+          // and the other sources". Keep going, briefly pause so the runtime can
+          // drain, and only give up after three stalls in a row.
           if (timedOut) {
-            debugPrint(
-              '[probe] JS lane stopped — runtime busy after $id timed out',
-            );
-            return;
+            consecutiveTimeouts++;
+            if (consecutiveTimeouts >= 3) {
+              debugPrint(
+                '[probe] JS lane paused — $consecutiveTimeouts sources in a '
+                'row left the runtime busy',
+              );
+              return;
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+            continue;
           }
+          consecutiveTimeouts = 0;
           await Future<void>.delayed(Duration.zero);
         }
       }
@@ -2223,10 +2250,9 @@ class PlaybackResolver {
     // FrameXTV ships in the APK but is not necessarily in the user's Source
     // Priority list. Append it as a last resort AFTER the cap: it can rescue a
     // sweep where every chosen source failed, without ever jumping the queue.
-    return withAutomaticFallbacks(
-      [for (final id in capped) (id: id, name: _sources.displayName(id))],
-      c.kind,
-    ).map((s) => s.id).toList();
+    return withAutomaticFallbacks([
+      for (final id in capped) (id: id, name: _sources.displayName(id)),
+    ], c.kind).map((s) => s.id).toList();
   }
 
   /// How many sources a sweep may walk, from the user's Source Priority

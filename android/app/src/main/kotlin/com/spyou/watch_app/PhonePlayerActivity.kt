@@ -75,6 +75,15 @@ class PhonePlayerActivity : Activity() {
         @JvmStatic
         @Volatile
         var active: PhonePlayerActivity? = null
+
+        /** True while the player is actually on screen. Plugins use
+         *  `startActivity` for both noise and for the Cloudflare solver they
+         *  need to resolve links; ClearCut drops the noise while someone is
+         *  watching (see PluginHost) but must not swallow the solver when the
+         *  app is elsewhere. */
+        @JvmStatic
+        @Volatile
+        var playerVisible: Boolean = false
     }
 
     private var player: ExoPlayer? = null
@@ -3168,6 +3177,7 @@ class PhonePlayerActivity : Activity() {
     // A phone gets interrupted by calls and notifications; the TV player never
     // had to handle this. Pause on the way out and leave resuming to the user.
     override fun onPause() {
+        playerVisible = false
         orientationObserver?.disable()
         super.onPause()
         sendProgress()
@@ -3181,6 +3191,7 @@ class PhonePlayerActivity : Activity() {
     // player and writing to invisible views while backgrounded; restart it
     // here rather than in onCreate.
     override fun onResume() {
+        playerVisible = true
         super.onResume()
         orientationObserver?.enable()
         updateKeepScreenOn()

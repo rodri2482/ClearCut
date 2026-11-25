@@ -33,3 +33,9 @@ const frameXtvSourceId = 'clearcut_framextv';
 const bundledSources = [
   BundledSource(frameXtvSourceId, 'framextv.js', 'FrameXTV'),
 ];
+
+/// Ids of every source shipped inside the APK. Used by the resolver to make
+/// sure these are asked early in the serialized JS lane: they are always
+/// installed and always quick, so they should never be starved by a slow
+/// third-party provider sitting in front of them.
+Set<String> bundledSourceIds() => {for (final s in bundledSources) s.id};

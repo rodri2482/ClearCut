@@ -999,6 +999,46 @@ void main() {
     expect(src.log, isEmpty, reason: 'cancelled means cancelled');
   });
 
+  test('one stalled JS source does not starve the sources behind it', () async {
+    // The serialized JS lane used to abort after a single timeout, so with a
+    // real library (140+ sources) one dead provider left everything queued
+    // behind it unasked — what viewers described as "the app doesn't reach
+    // FrameXTV and the other sources".
+    final src = _SweepSrc(
+      aEps: const [
+        Episode(id: '1', title: 'Ep 1', number: 1, url: 'https://a/1'),
+      ],
+      bEps: const [
+        Episode(id: '1', title: 'Ep 1', number: 1, url: 'https://b/1'),
+        Episode(id: '2', title: 'Ep 2', number: 2, url: 'https://b/2'),
+      ],
+      // src-a comes first and its episode call never answers.
+      hangs: {'src-a'},
+    );
+    final matcher = SourceMatcher(
+      sources: src,
+      store: store,
+      prefs: prefs,
+      candidates: (_) => src.loadedSources,
+    );
+    final r = resolver(sources: src, matcher: matcher);
+
+    final probes = await r
+        .probeEach(_ep2, wallClock: const Duration(seconds: 30))
+        .where((p) => !p.checking)
+        .toList();
+
+    expect(
+      probes.map((p) => p.sourceId),
+      contains('src-b'),
+      reason: 'src-b sits behind the stalled source and must still be asked',
+    );
+    expect(
+      probes.firstWhere((p) => p.sourceId == 'src-b').hasEpisode,
+      isTrue,
+    );
+  });
+
   test('Play uses the source Auto Resolve found on Detail instead of '
       're-sweeping into a different source', () async {
     final src = _SweepSrc(

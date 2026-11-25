@@ -1994,7 +1994,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get audioDelay => 'Ritardo audio';
 
   @override
-  String get androidPlayer => 'Android Player';
+  String get androidPlayer => 'Android Player (Experimental)';
 
   @override
   String get androidPlayerUnavailable => 'Android Player could not start';

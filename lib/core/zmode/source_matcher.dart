@@ -5,6 +5,7 @@ import '../models/media_item.dart';
 import '../models/provider_info.dart';
 import '../provider/cf_solve_needed.dart';
 import '../repository/source_repository.dart';
+import 'automatic_fallbacks.dart';
 import 'match_store.dart';
 import 'nsfw_guard.dart';
 import 'playback_resolver.dart' show SweepReason;
@@ -47,6 +48,18 @@ class EpisodeNotOnSource implements Exception {
 /// re-guessed. One source is always the current "selected" one — the one
 /// episodes/playback use — and [resolve] is what keeps that selection.
 class SourceMatcher {
+  /// How long Auto Resolve may keep STARTING new sources when it walks the
+  /// video sweep list.
+  ///
+  /// The count-based cap (`kAutoResolveDefaultCap`, ten) only ever applied to
+  /// reading through `sweepList`; video walked the whole narrowed list, which
+  /// on a real library is hundreds of sources behind a single JS engine. Time
+  /// is the honest unit there: ten patient sources on a fast network and forty
+  /// on a slow one are the same wait, not the same count. Sized to roughly the
+  /// old cap's cost, so this preserves the intended breadth rather than adding
+  /// a new limit — and in-flight searches still finish and still win.
+  static const Duration autoResolveSweepBudget = Duration(seconds: 30);
+
   SourceMatcher({
     required SourceRepository sources,
     required MatchStore store,
@@ -54,6 +67,7 @@ class SourceMatcher {
     required List<({String id, String name})> Function(ZKind) candidates,
     List<({String id, String name})> Function(ZKind)? sweepCandidates,
     this.videoSearchConcurrency = 1,
+    this.sweepBudget = autoResolveSweepBudget,
   }) : _sources = sources,
        _store = store,
        _prefs = prefs,
@@ -62,6 +76,10 @@ class SourceMatcher {
 
   final SourceRepository _sources;
   final int videoSearchConcurrency;
+
+  /// [autoResolveSweepBudget], overridable so a test can spend it on purpose
+  /// instead of waiting thirty seconds for the behaviour it exists to bound.
+  final Duration sweepBudget;
   final MatchStore _store;
   final ZSourcePrefs _prefs;
   final List<({String id, String name})> Function(ZKind) _candidates;
@@ -142,7 +160,17 @@ class SourceMatcher {
       if (abandoned?.call() ?? false) return null;
       try {
         final results = await _sources.search(q, sourceId: sourceId);
-        if (abandoned?.call() ?? false) return null;
+        if (abandoned?.call() ?? false) {
+          // This used to be invisible: the HTTP round-trip had already
+          // succeeded, the answers were in hand, and they were dropped without
+          // a word — which is how a working bundled source looked exactly like
+          // a source that had nothing. Say so, and say how much was thrown away.
+          debugPrint(
+            '[zmode] $sourceId search DISCARDED ${results.length} results '
+            'for "$q" — caller had gone',
+          );
+          return null;
+        }
         if (c.kind == ZKind.movie || c.kind == ZKind.tv) {
           final tv = c.kind == ZKind.tv;
           final expected = c.id.startsWith('tmdb:')
@@ -553,6 +581,64 @@ class SourceMatcher {
     }
     final sweep = _sweepCandidates(c.kind);
 
+    // Automatic fallbacks (FrameXTV) are LAST in the sweep on purpose: nothing
+    // is promoted above the viewer's own Source Priority. Measured on a real
+    // phone, though, "last" had quietly become "never" — the sweep is capped at
+    // ten sources, the JS engine runs one call at a time, and the entire time
+    // budget was spent on those ten, so candidate eleven was never asked. The
+    // viewer got "no source has this" from a bundled source that had the
+    // episode the whole time.
+    //
+    // So: ask now, accept later. The answer is held until the ordered walk has
+    // genuinely come up empty, which keeps priority deciding *which source
+    // plays* without letting it decide *which source ever gets asked*.
+    final speculative = <({String id, Future<SourceMatch?> answer})>[];
+    for (final fallback in automaticFallbacks(c.kind)) {
+      if (!sweep.any((s) => s.id == fallback.id)) continue;
+      speculative.add((
+        id: fallback.id,
+        answer: matchOn(
+          c,
+          fallback.id,
+          title: title,
+          altTitle: altTitle,
+          metadataAliases: metadataAliases,
+          malId: malId,
+          // Deliberately not [abandoned]: the ordered walk giving up is the
+          // exact case this answer exists for, and dropping it here is what
+          // made the source vanish with no trace in the log. The provider's own
+          // 25s ceiling bounds the work instead.
+          abandoned: () => false,
+        ).catchError((Object _) => null),
+      ));
+    }
+    final speculativeIds = {for (final e in speculative) e.id};
+
+    // The parallel ask covers them, so the walk must not search the same
+    // source a second time.
+    final walk = [
+      for (final s in sweep)
+        if (!speculativeIds.contains(s.id)) s,
+    ];
+
+    // Never ahead of the viewer's sources, and never a new way to hang: a
+    // fallback that cannot answer within a short grace is simply not used.
+    Future<SourceMatch?> takeFallback() async {
+      for (final e in speculative) {
+        final m = await e.answer.timeout(
+          const Duration(seconds: 8),
+          onTimeout: () => null,
+        );
+        if (m == null) continue;
+        debugPrint(
+          '[source-matcher] _resolve · AUTO → ${e.id} '
+          '(automatic fallback, asked in parallel)',
+        );
+        return m;
+      }
+      return null;
+    }
+
     // Reading uses its remembered source, and does not sweep.
     //
     // A sweep is only safe where something can recover from a bad pick. Video
@@ -592,14 +678,31 @@ class SourceMatcher {
       bool stopped() => finished || (abandoned?.call() ?? false);
       final pending = <int, Future<SourceMatch?>>{};
       var next = 0;
+      var budgetSpent = false;
+      final sweepDeadline = DateTime.now().add(sweepBudget);
 
       void fill() {
         while (pending.length < videoSearchConcurrency &&
-            next < sweep.length &&
+            next < walk.length &&
             !stopped()) {
+          // This is a wall-clock budget, not a count, because the cost per
+          // candidate is not a count: one JS engine, hundreds of installed
+          // sources, and a title that is simply not on the first hundred. The
+          // walk used to keep starting new sources until the caller gave up —
+          // measured at 416 pickable sources on a real library, which is
+          // minutes of searching that ends in "no source has this" while the
+          // bundled fallback had answered in about a second.
+          //
+          // Running out of budget only stops STARTING new work. Anything
+          // already in flight still finishes, and still wins: the viewer's own
+          // order decides who plays, the budget decides when to stop asking.
+          if (DateTime.now().isAfter(sweepDeadline)) {
+            budgetSpent = true;
+            return;
+          }
           final index = next++;
-          final source = sweep[index];
-          onProgress?.call(source.name, index + 1, sweep.length);
+          final source = walk[index];
+          onProgress?.call(source.name, index + 1, walk.length);
           if (stopped()) return;
           var timedOut = false;
           pending[index] =
@@ -637,20 +740,29 @@ class SourceMatcher {
         }
         fill();
       }
+      // Out of candidates without a hit. The viewer leaving is not a miss, so
+      // only an exhausted walk may fall through to the automatic fallback.
+      if (budgetSpent) {
+        debugPrint(
+          '[source-matcher] _resolve · AUTO sweep budget spent after asking '
+          '$next of ${walk.length} candidates',
+        );
+      }
+      if (abandoned?.call() ?? false) return null;
       finished = true;
-      return null;
+      return takeFallback();
     }
     // Auto Resolve — the true default until the user pins a title or sets a
     // kind default by hand: sweep every candidate, in the user's saved
     // priority order, and take the first genuine hit.
     debugPrint(
       '[source-matcher] _resolve · kind=${c.kind} title="$title" '
-      'AUTO — sweeping ${sweep.length} candidates '
-      '(${sweep.map((s) => s.id).take(5).join(",")}'
-      '${sweep.length > 5 ? "…" : ""})',
+      'AUTO — sweeping ${walk.length} candidates '
+      '(${walk.map((s) => s.id).take(5).join(",")}'
+      '${walk.length > 5 ? "…" : ""})',
     );
-    for (var i = 0; i < sweep.length; i++) {
-      final s = sweep[i];
+    for (var i = 0; i < walk.length; i++) {
+      final s = walk[i];
       // The viewer left: stop before the next source. Going back out of a detail
       // screen used to leave this sweep running, so tapping titles quickly piled
       // up one live search per screen and each new tap waited behind all the
@@ -665,7 +777,7 @@ class SourceMatcher {
         );
         return null;
       }
-      onProgress?.call(s.name, i + 1, sweep.length);
+      onProgress?.call(s.name, i + 1, walk.length);
       final m = await matchOn(
         c,
         s.id,
@@ -685,7 +797,7 @@ class SourceMatcher {
     debugPrint(
       '[source-matcher] _resolve · AUTO → null (no candidate matched)',
     );
-    return null;
+    return takeFallback();
   }
 
   /// Which [sourceId] has a pinned match for [c], if any.

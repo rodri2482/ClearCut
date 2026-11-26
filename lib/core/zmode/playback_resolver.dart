@@ -820,16 +820,40 @@ class PlaybackResolver {
       );
     }
 
-    /// Ask a set of candidates together and return their events in candidate
-    /// order. The automatic second chance below uses the exact same
-    /// attribution/ordering rules as the main sweep.
-    Stream<ProgressiveResolve> runQueue(List<String> queue) async* {
+    /// Ask the sweep's candidates and hand the player the first thing that
+    /// genuinely answers.
+    ///
+    /// The window is eight wide and takes whichever source lands FIRST, on
+    /// purpose: `Play must not wait for a slow source to time out` is a rule
+    /// with tests behind it, and a title whose top source is hanging still has
+    /// to open on one that answers — including sources past the configured
+    /// limit, which is how a three-wide wave turned into a two-second stall.
+    /// What is not left to a race is the head start: see [firstAlone].
+    Stream<ProgressiveResolve> runQueue(
+      List<String> queue, {
+      bool firstAlone = false,
+    }) async* {
       final pending = <String, Future<_Attempt?>>{};
       var next = 0;
       void fill() {
         while (pending.length < 8 && next < queue.length && gen == _sweepGen) {
           final id = queue[next++];
           pending[id] = ask(id);
+        }
+      }
+
+      if (firstAlone && queue.isNotEmpty) {
+        // The head start, asked ALONE and ahead of the window, exactly as the
+        // non-progressive sweep does it. "Continue with episode 2" used to
+        // search every candidate because episode 1 had settled on one of them
+        // and this path ignored that; the remembered source's title match is
+        // already stored, so this costs one cheap lookup — and when it
+        // answers, nothing else gets asked at all.
+        final attempt = await ask(queue[next++]);
+        if (gen != _sweepGen) throw const PlaybackAborted();
+        if (attempt != null) {
+          yield await recordHit(attempt);
+          return;
         }
       }
 
@@ -889,7 +913,14 @@ class PlaybackResolver {
           queue.add(sourceId);
         }
       }
-      await for (final event in runQueue(queue)) {
+      // The same head start the non-progressive sweep gives the source that
+      // just played this show, computed by the same function so the two paths
+      // cannot disagree about what "remembered" means.
+      final remembered = _rememberedPlaybackSource(p.show, queue);
+      await for (final event in runQueue(
+        queue,
+        firstAlone: remembered != null,
+      )) {
         yield event;
       }
     }

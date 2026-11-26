@@ -180,8 +180,14 @@ class MatchStore {
       any ??= m;
       if (newest == null || m.at >= newest.at) newest = m;
     }
-    // The freshest Auto Resolve answer is what the viewer just saw on Detail.
-    if (newest != null && newest.at > 0) return newest;
+    // A source that has actually PLAYED this title outranks a fresher guess.
+    // The early `newest` return above used to come first, so episode 2 opened on
+    // whichever source Auto Resolve had most recently *cached* — often one that
+    // was merely swept and never played — rather than the one episode 1 played
+    // on. That contradicts the documented order here and the remembered-source
+    // contract the player relies on, and it made playback look random from one
+    // episode to the next. With nothing played yet, `played` is null and the
+    // freshest answer is still what gets returned, exactly as before.
     return played ?? newest ?? any;
   }
 

@@ -19,6 +19,7 @@ import '../playback/pinned_sources.dart';
 import '../models/provider_info.dart';
 import '../playback/playback_prefs.dart';
 import '../provider/cloudstream_provider.dart';
+import '../provider/bundled_sources.dart';
 import '../provider/provider_manager.dart';
 import '../provider/provider_registry.dart';
 import '../theme/app_colors.dart';
@@ -372,6 +373,10 @@ SourceBuckets categorizedSources() {
 /// bucketing default, so an id with no cached manifest type still counts as
 /// anime (matching today's behavior when a mode filter isn't applied).
 ProviderType sourceTypeOf(String id) {
+  // Bundled reading sources have no repo manifest and cannot borrow a
+  // `mihon:` prefix (that would route them to a native extension bridge).
+  // Same explicit exception as `sourceIdMatchesContentMode`.
+  if (bundledMangaSourceIds.contains(id)) return ProviderType.manga;
   // ClearCut Mode's pseudo source has no manifest to type — its "type" is
   // whatever catalogue kind is currently browsed. `movie`/`anime`/`tv` all
   // fall under `anime` here since ContentMode.anime.matchesProvider accepts
@@ -424,6 +429,7 @@ ProviderType sourceTypeOf(String id) {
 /// call. Used by callers that resolve many ids in one pass — the repo
 /// manifests get walked once for the whole pass instead of once per id.
 ProviderType _typeOfFromMap(String id, Map<String, String> typeMap) {
+  if (bundledMangaSourceIds.contains(id)) return ProviderType.manga;
   if (id.startsWith('cs:')) {
     final p = sl<CloudStreamManager>().get(id);
     return p is CloudStreamProvider ? p.providerType : ProviderType.anime;

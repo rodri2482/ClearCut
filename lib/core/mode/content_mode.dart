@@ -3,12 +3,21 @@ import 'package:zangetsu_source_bridge/zangetsu_source_bridge.dart';
 
 import '../mangayomi/mangayomi_source_id.dart';
 import '../models/provider_info.dart';
+import '../provider/bundled_sources.dart';
 
 /// The app-wide content mode. Anime is the default and covers the whole
 /// existing video app (anime + movie sources); manga/novel are reading modes.
 enum ContentMode { anime, manga, novel }
 
 bool sourceIdMatchesContentMode(String sourceId, ContentMode mode) {
+  // Bundled reading sources are JS providers with no repo manifest and no
+  // `mihon:`/`lnr:` prefix (prefixing one would route it to a native bridge
+  // that has no such extension). Without this, WEBTOON was "anime" everywhere
+  // that matters — the mode switch and the Z Mode candidate lists — and could
+  // not be opened as a manga source at all.
+  if (bundledMangaSourceIds.contains(sourceId)) {
+    return mode == ContentMode.manga;
+  }
   final mangayomiType = mangayomiContentTypeOf(sourceId);
   if (mangayomiType != null) {
     return switch (mode) {

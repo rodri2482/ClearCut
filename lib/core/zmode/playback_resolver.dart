@@ -2012,7 +2012,7 @@ class PlaybackResolver {
       // no longer starve FrameXTV (and everything else) out of the survey.
       // This changes only the ORDER OF ASKING, never which source wins —
       // playback still follows the viewer's Source Priority.
-      final bundled = bundledSourceIds();
+      final bundled = bundledVideoSourceIds();
       js = [
         ...js.where((id) => bundled.contains(id)),
         ...js.where((id) => !bundled.contains(id)),

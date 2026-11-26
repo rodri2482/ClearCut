@@ -30,8 +30,18 @@ class BundledSource {
 
 const frameXtvSourceId = 'clearcut_framextv';
 
+/// WEBTOON ships inside the APK as a READING source: image chapters, not
+/// video. A bare bundled id has no repo manifest, so the app's type resolver
+/// would otherwise call it anime and hide it from Manga mode entirely. The
+/// id-prefix rules (`mihon:` = manga) can't be used here — prefixing a JS
+/// provider with `mihon:` routes its data calls to the native Mihon bridge,
+/// which has no such extension installed. This set is the explicit exception.
+const webtoonSourceId = 'clearcut_webtoon';
+const bundledMangaSourceIds = {webtoonSourceId};
+
 const bundledSources = [
   BundledSource(frameXtvSourceId, 'framextv.js', 'FrameXTV'),
+  BundledSource(webtoonSourceId, 'webtoon.js', 'WEBTOON'),
 ];
 
 /// Ids of every source shipped inside the APK. Used by the resolver to make
@@ -39,3 +49,12 @@ const bundledSources = [
 /// installed and always quick, so they should never be starved by a slow
 /// third-party provider sitting in front of them.
 Set<String> bundledSourceIds() => {for (final s in bundledSources) s.id};
+
+/// Bundled sources that actually serve VIDEO. The video resolver's JS-lane
+/// promotion uses this, not [bundledSourceIds]: promoting a bundled reading
+/// source there would search WEBTOON for an anime title and hand its comic
+/// results to the video survey.
+Set<String> bundledVideoSourceIds() => {
+  for (final s in bundledSources)
+    if (!bundledMangaSourceIds.contains(s.id)) s.id,
+};

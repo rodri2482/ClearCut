@@ -354,6 +354,19 @@ class PlaybackResolver {
   /// still true, a 25s wait would still be 25 frozen seconds, so the tight
   /// budget stands.
   static const Duration chosenSourceBudget = Duration(seconds: 25);
+
+  /// How long Auto Find waits for a source the viewer ranked HIGHER that has
+  /// already resolved its episode list, once a lower-ranked source has a
+  /// playable answer sitting in hand.
+  ///
+  /// The rule this buys: "brief grace, then fastest". A source that is down to
+  /// its last step — resolving stream links — very likely has the episode, so
+  /// it gets a moment to prove it and keep its place. A source that hasn't even
+  /// produced an episode list gets none at all: waiting for that is how a
+  /// single hung source used to hold the episode hostage. Deliberately short —
+  /// long enough to cover a normal link fetch, short enough that the viewer
+  /// never wonders whether Play is broken.
+  static const Duration priorityGrace = Duration(milliseconds: 2500);
   final Duration _chosenBudget;
 
   /// The budget for [sourceId] given the sources this viewer chose.
@@ -722,6 +735,11 @@ class PlaybackResolver {
     /// rescue a title the viewer would otherwise have to press Retry for.
     final matchedSources = <String>{};
 
+    /// Candidates that resolved their episode list and are down to fetching
+    /// links. [PlaybackResolver.priorityGrace] waits for one of these ahead of
+    /// a lower-ranked answer — see the constant for why only these.
+    final linkingSources = <String>{};
+
     // One candidate, start to finish — same body as [_resolve]'s `ask`, minus
     // the download branch: progressive is always the foreground wait.
     final attemptedIds = <String>{};
@@ -752,6 +770,7 @@ class PlaybackResolver {
             hadTitleMatch = true;
             matchedSources.add(sourceId);
           },
+          onLinksFetch: () => linkingSources.add(sourceId),
           onMiss: (reason) => note(sourceId, reason),
         ).timeout(budget);
         // Stop WAITING when the viewer leaves; the answer underneath is
@@ -834,6 +853,9 @@ class PlaybackResolver {
       bool firstAlone = false,
     }) async* {
       final pending = <String, Future<_Attempt?>>{};
+      final position = {
+        for (var i = 0; i < queue.length; i++) queue[i]: i,
+      };
       var next = 0;
       void fill() {
         while (pending.length < 8 && next < queue.length && gen == _sweepGen) {
@@ -857,6 +879,37 @@ class PlaybackResolver {
         }
       }
 
+      if (stopAfterFirstWave) {
+        // TV: the wave is the unit. Sources are asked `sweepWaveSize` at a
+        // time, the wave that produces links is drained to the last mirror —
+        // that is what the quality picker lists — and the NEXT wave is never
+        // started. The phone path below keeps its wide sliding window instead,
+        // because a phone Play that must not hang behind a slow source is a
+        // different contract from a TV sweep that wants to show what it found.
+        final rest = queue.sublist(next);
+        for (final wave in _candidateWaves(rest)) {
+          if (gen != _sweepGen) throw const PlaybackAborted();
+          final wavePending = <String, Future<_Attempt?>>{
+            for (final id in wave) id: ask(id),
+          };
+          var hit = false;
+          while (wavePending.isNotEmpty) {
+            final landed = await Future.any([
+              for (final entry in wavePending.entries)
+                entry.value.then((attempt) => (id: entry.key, attempt: attempt)),
+            ]);
+            wavePending.remove(landed.id);
+            if (gen != _sweepGen) throw const PlaybackAborted();
+            final attempt = landed.attempt;
+            if (attempt == null) continue;
+            hit = true;
+            yield await recordHit(attempt);
+          }
+          if (hit) return;
+        }
+        return;
+      }
+
       fill();
       while (pending.isNotEmpty) {
         final landed = await Future.any([
@@ -867,8 +920,34 @@ class PlaybackResolver {
         if (gen != _sweepGen) throw const PlaybackAborted();
         final attempt = landed.attempt;
         if (attempt != null) {
+          // "Brief grace, then fastest". A lower-ranked source has a playable
+          // answer in hand; a source the viewer ranked ABOVE it is already down
+          // to fetching links — the step that almost always finishes. Give
+          // that source a moment to keep its place, in queue order, before
+          // playing something beneath it. A source that hasn't even produced an
+          // episode list is not waited for at all: patience for a probable hit,
+          // none for a stall.
+          final landedAt = position[landed.id] ?? 0;
+          final ahead = [
+            for (final id in pending.keys)
+              if ((position[id] ?? 0) < landedAt && linkingSources.contains(id))
+                id,
+          ]..sort((a, b) => position[a]!.compareTo(position[b]!));
+          for (final id in ahead) {
+            final waitingOn = pending.remove(id);
+            if (waitingOn == null) continue;
+            final earlier = await waitingOn.timeout(
+              priorityGrace,
+              onTimeout: () => null,
+            );
+            if (gen != _sweepGen) throw const PlaybackAborted();
+            // Grace over means grace OVER for this source: its late answer is
+            // dropped, exactly as an over-budget candidate's is.
+            if (earlier != null) yield await recordHit(earlier);
+          }
           yield await recordHit(attempt);
-          if (stopAfterFirstWave) return;
+          // `stopAfterFirstWave` never reaches here: the TV branch above owns
+          // that contract in full, waves and all.
         }
         fill();
       }
@@ -2130,6 +2209,12 @@ class PlaybackResolver {
     required void Function() onTitleMatch,
     required void Function(SweepReason) onMiss,
     String category = 'sub',
+
+    /// Fires when this candidate has its episode and is resolving stream
+    /// links — the last, cheap, likely-to-finish step. The sweep's priority
+    /// grace keys off this: a source worth waiting a moment for, as opposed
+    /// to one that hasn't even produced an episode list yet.
+    void Function()? onLinksFetch,
   }) async {
     final match = await _matcher.matchOn(
       p.show,
@@ -2162,6 +2247,9 @@ class PlaybackResolver {
       return null;
     }
 
+    // The last step, and the one the sweep is willing to be briefly patient
+    // about: the title and the episode are proven, only links remain.
+    onLinksFetch?.call();
     final streams = await _sources.sources(
       srcEp.url,
       sourceId: match.sourceId,

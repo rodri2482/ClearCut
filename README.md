@@ -21,6 +21,7 @@ Stream and download anime episodes, anime movies, TV series and movies. A built-
 - **Downloads**: save episodes and movies (including HLS streams with subtitles) for offline viewing. Downloads keep running in the background.
 - **Built-in free sources** that work with no setup:
   - **FrameXTV**: movies and series, shipped as supplied.
+  - **WEBTOON**: free, official webcomics from Naver's own site, in ClearCut's Manga reader. Search, series pages, chapters and panels all come from the site's public pages; its own ads are left intact.
   - **Project Gutenberg (free books)**: over 70,000 public-domain books with covers, split into chapters, in the Novel reader. If gutenberg.org is down, they load from the official PGLAF mirror.
   - **Wikisource texts**: public-domain source texts for the reader.
   - Internet Archive, NASA, Wikimedia Commons, Blender, Prelinger, PeerTube, Openverse and WikiFlix are **not** bundled.

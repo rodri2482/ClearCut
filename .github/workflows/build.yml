@@ -71,6 +71,28 @@ jobs:
         if: steps.signing.outputs.signed == 'true'
         run: flutter build apk --release --split-per-abi
 
+      # Twice during development a failed Kotlin build left corrupt Gradle
+      # intermediates and produced APKs with NO libapp.so (the whole Dart AOT
+      # snapshot). They installed fine and crashed on launch. Never publish
+      # one: check the native libs on the actual artifacts, not the build log.
+      - name: Verify native libraries in release APKs
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          for apk in build/app/outputs/flutter-apk/*-release.apk; do
+            echo "Checking $apk"
+            unzip -l "$apk" | grep -q 'libapp.so' || {
+              echo "::error::libapp.so missing from $apk - refusing to publish"
+              exit 1
+            }
+            for lib in libflutter.so libmpv.so libadblock-client.so; do
+              unzip -l "$apk" | grep -q "$lib" || {
+                echo "::error::$lib missing from $apk - refusing to publish"
+                exit 1
+              }
+            done
+          done
+
       - name: Build debug APK (no signing secrets)
         if: steps.signing.outputs.signed != 'true'
         run: flutter build apk --debug

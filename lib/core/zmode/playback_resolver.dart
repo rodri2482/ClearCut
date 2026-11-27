@@ -1067,6 +1067,23 @@ class PlaybackResolver {
 
     final done = firstHit;
     if (done == null) {
+      // A hand-picked source is a firm choice — never substitute another.
+      // Everything else gets one final try by catalogue ID before we report
+      // that nobody has the episode.
+      if (selectedSource == null && gen == _sweepGen) {
+        final lastResort = await _tryFrameXtvById(p, t, category: category);
+        if (lastResort != null) {
+          if (gen != _sweepGen) throw const PlaybackAborted();
+          yield await recordHit(lastResort);
+          yield ProgressiveResolve(
+            match: lastResort.match,
+            episodeUrl: lastResort.episodeUrl,
+            streams: [...acc],
+            done: true,
+          );
+          return;
+        }
+      }
       // Nothing answered — the same verdicts the full sweep reports, and
       // the same short-lived memory so the next tap answers instantly.
       final blocked = _matcher.cfBlockedUrl(p.show.kind);
@@ -1551,6 +1568,23 @@ class PlaybackResolver {
           match: attempt.match,
           episodeUrl: attempt.episodeUrl,
           streams: attempt.streams,
+          show: p.show,
+          episode: p.episode,
+        );
+      }
+    }
+
+    // One final last resort for playback: resolve by the title's catalogue id
+    // through FrameXTV's server pool (no dependency on its own catalog). A
+    // hand-picked source and download sweeps are left alone.
+    if (accept == null && _matcher.sourceForTitle(p.show) == null) {
+      final lastResort = await _tryFrameXtvById(p, t, category: category);
+      if (lastResort != null) {
+        if (gen != _sweepGen) throw const PlaybackAborted();
+        return ResolvedPlayback(
+          match: lastResort.match,
+          episodeUrl: lastResort.episodeUrl,
+          streams: lastResort.streams,
           show: p.show,
           episode: p.episode,
         );
@@ -2242,6 +2276,63 @@ class PlaybackResolver {
   /// single future, so [perSourceBudget] can cap all three together. Null when
   /// this source simply doesn't have the title or the episode; it throws only
   /// when the source itself failed.
+  /// Final last resort: resolve a title by its CATALOGUE ID through FrameXTV's
+  /// server pool. Unlike the normal source sweep this does not need FrameXTV's
+  /// own catalog to list the title — its API accepts a bare TMDB/AniList id,
+  /// which was verified live for movies and anime. A MAL id is a different id
+  /// space (the anime API wants AniList), so those are deliberately skipped.
+  Future<_Attempt?> _tryFrameXtvById(
+    ({ZCanonical show, int episode}) p,
+    ({String title, String? alt, int? malId}) t, {
+    required String category,
+  }) async {
+    if (!automaticFallbacks(p.show.kind)
+        .any((f) => f.id == frameXtvSourceId)) {
+      return null;
+    }
+    final id = p.show.id;
+    String? showUrl;
+    if ((p.show.kind == ZKind.movie || p.show.kind == ZKind.tv) &&
+        id.startsWith('tmdb:')) {
+      final tmdb = int.tryParse(id.substring('tmdb:'.length));
+      if (p.show.kind == ZKind.movie) {
+        if (tmdb != null) showUrl = 'framextv://movie/$tmdb';
+      } else {
+        final coords = _tvEpisodeLookup == null
+            ? (season: 1, number: p.episode)
+            : await _tvEpisodeLookup!(p.show, p.episode);
+        if (tmdb != null && coords != null) {
+          showUrl = 'framextv://tv/$tmdb/${coords.season}/${coords.number}';
+        }
+      }
+    } else if (p.show.kind == ZKind.anime && id.startsWith('al:')) {
+      final anilist = int.tryParse(id.substring('al:'.length));
+      if (anilist != null) {
+        showUrl = 'framextv://anime/$anilist/1/${p.episode}';
+      }
+    }
+    if (showUrl == null) return null;
+
+    final synthetic = SourceMatch(
+      sourceId: frameXtvSourceId,
+      showUrl: showUrl,
+      showId: id,
+      showTitle: t.title,
+      pinned: false,
+    );
+    debugPrint('[playback] final fallback · $showUrl (FrameXTV servers by ID)');
+    return _tryCandidate(
+      p,
+      frameXtvSourceId,
+      t,
+      fast: true,
+      category: category,
+      onTitleMatch: () {},
+      onMiss: (_) {},
+      syntheticMatch: synthetic,
+    );
+  }
+
   Future<_Attempt?> _tryCandidate(
     ({ZCanonical show, int episode}) p,
     String sourceId,
@@ -2256,8 +2347,13 @@ class PlaybackResolver {
     /// grace keys off this: a source worth waiting a moment for, as opposed
     /// to one that hasn't even produced an episode list yet.
     void Function()? onLinksFetch,
+
+    /// A match built from a catalogue ID rather than the source's own search.
+    /// Used by the final FrameXTV-by-ID fallback: the title came from another
+    /// source's metadata, so asking FrameXTV to match it by name would fail.
+    SourceMatch? syntheticMatch,
   }) async {
-    final match = await _matcher.matchOn(
+    final match = syntheticMatch ?? await _matcher.matchOn(
       p.show,
       sourceId,
       title: t.title,

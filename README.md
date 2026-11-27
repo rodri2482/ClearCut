@@ -20,7 +20,7 @@ Stream and download anime episodes, anime movies, TV series and movies. A built-
 - **Watch ad-free**: the NoFlix web player opens any movie or show by its TMDB id. An AdGuard / EasyPrivacy ad blocker with a native engine removes ads, pop-ups, trackers and redirects.
 - **Downloads**: save episodes and movies (including HLS streams with subtitles) for offline viewing. Downloads keep running in the background.
 - **Built-in free sources** that work with no setup:
-  - **FrameXTV**: movies and series, shipped as supplied.
+  - **FrameXTV**: movies and series, shipped as supplied. Its stream servers are listed in the source's settings so you can choose which ones are tried, and it acts as a final ID-based last resort when no other source can play a title.
   - **WEBTOON**: free, official webcomics from Naver's own site, in ClearCut's Manga reader. Search, series pages, chapters and panels all come from the site's public pages; its own ads are left intact.
   - **Project Gutenberg (free books)**: over 70,000 public-domain books with covers, split into chapters, in the Novel reader. If gutenberg.org is down, they load from the official PGLAF mirror.
   - **Wikisource texts**: public-domain source texts for the reader.

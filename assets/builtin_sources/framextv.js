@@ -10,6 +10,45 @@ var recentDefaults = new Map();
 // (Sources-menu) path took 11.5s on a real title and was cut off as a miss.
 var RESOLVE_DEADLINE_MS = 4200;
 var MAX_EXTRA_SERVERS = 12;
+
+// The public /api/providers list FrameXTV's own web client uses. Labels come
+// from its live API; the ids are stable internal codenames. Status changes at
+// runtime, so the picker is about PREFERENCE, not a promise a server is up.
+var SERVER_OPTIONS = [
+  ['royal_champion', 'Royal Champion I'], ['sparky', 'Sparky I'],
+  ['bowler', 'Bowler XVIII'], ['druid', 'Druid I'], ['giant', 'Giant XI'],
+  ['dragon_rider', 'Dragon Rider I'], ['barbarian_king', 'Barbarian King I'],
+  ['super_barbarian', 'Super Barbarian XVI'], ['grand_warden', 'Grand Warden I'],
+  ['electro_dragon', 'Electro Dragon I'], ['monk', 'Monk I'],
+  ['executioner', 'Executioner I'], ['skeleton_king', 'Skeleton King I'],
+  ['headhunter', 'Headhunter XXXI'], ['vidnest', 'Goblin I'],
+  ['inferno_dragon', 'Inferno Dragon I'], ['vidly', 'Baby Dragon I'],
+  ['root_rider', 'Root Rider I'], ['bigdaddy', 'Big Daddy I'],
+  ['velarium', 'Ice Wizard I'], ['archer_queen', 'Archer Queen I'],
+  ['miner', 'Miner XIX'], ['little_prince', 'Little Prince I'],
+];
+
+// Saved provider settings are pushed into __settings[sourceId] by Dart. The
+// harness (and a fresh provider before first save) has no such object, so
+// this must be guarded by typeof and must apply its own defaults.
+function savedSettings() {
+  if (typeof __settings === 'undefined' || !__settings) return {};
+  return __settings[__SOURCE_ID] || __settings[SOURCE_ID] || {};
+}
+
+function getSettings() {
+  return [
+    {
+      key: 'servers',
+      label: 'Stream servers to try',
+      type: 'multiEnum',
+      default: SERVER_OPTIONS.map(function (entry) { return entry[0]; }),
+      options: SERVER_OPTIONS.map(function (entry) {
+        return {value: entry[0], label: entry[1]};
+      }),
+    },
+  ];
+}
 var ROWS = [
   ['trending_movies', 'Trending movies', '/api/trending', {type: 'movie'}],
   ['popular_movies', 'Popular movies'],
@@ -353,6 +392,13 @@ function getVideoSources(url, fast) {
     // 11.5s on a real title, which made the source look unreachable (and froze
     // out every JS source queued behind it). Extra servers are capped and the
     // loop stops at the deadline, returning whatever already resolved.
+    // Honour the viewer's server preference. Missing/empty means "all", so a
+    // fresh install behaves exactly as before and no server silently disappears.
+    var pref = savedSettings().servers;
+    if (Array.isArray(pref) && pref.length) {
+      var allowed = new Set(pref);
+      ids = ids.filter(function (id) { return allowed.has(id); });
+    }
     ids = ids.slice(0, MAX_EXTRA_SERVERS);
     for (var offset = 0; offset < ids.length; offset += 6) {
       var remaining = RESOLVE_DEADLINE_MS - (Date.now() - startedAt);

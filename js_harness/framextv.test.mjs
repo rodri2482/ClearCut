@@ -140,3 +140,12 @@ test('anime sources include a separate dub lookup and retain audio language', as
   assert.equal(dub.label, 'English Mirror · Dub');
   assert.equal(dub.audioLang, 'en');
 });
+
+test('the server picker exposes the public provider list', async () => {
+  const settings = await call('getSettings');
+  const servers = settings.find(s => s.key === 'servers');
+  assert.equal(servers.type, 'multiEnum');
+  assert.equal(servers.options.length, 23);
+  assert.ok(servers.default.length > 0);
+  assert.ok(servers.options.every(o => o.value && o.label));
+});

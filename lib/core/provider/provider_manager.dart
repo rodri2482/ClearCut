@@ -1094,11 +1094,11 @@ class JsProvider implements BaseProvider, ReadingProvider {
       ],
       // Auto Find fans a query across hundreds of sources. The old shared
       // 25s ceiling let one queued search hold the whole JS lane that long;
-      // 12s wait / 10s execution frees it early while still covering the
+      // 14s wait / 12s execution frees it early while still covering the
       // slow-but-real sources measured on device (~11s). Stream resolution
       // keeps its full budget.
-      timeout: const Duration(seconds: 10),
-      callTimeout: const Duration(seconds: 12),
+      timeout: const Duration(seconds: 12),
+      callTimeout: const Duration(seconds: 14),
     );
     final list = (await _decodeBig(raw) as List)
         .map((e) => Map<String, dynamic>.from(e as Map))

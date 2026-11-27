@@ -62,6 +62,7 @@ Future<void> registerZangetsuMode(GetIt sl) async {
           ? sweepList(kind)
           : sweepCandidates(kind),
       videoSearchConcurrency: 4,
+      useSearchCache: true,
     ),
   );
 

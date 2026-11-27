@@ -68,6 +68,7 @@ class SourceMatcher {
     List<({String id, String name})> Function(ZKind)? sweepCandidates,
     this.videoSearchConcurrency = 1,
     this.sweepBudget = autoResolveSweepBudget,
+    this.useSearchCache = false,
   }) : _sources = sources,
        _store = store,
        _prefs = prefs,
@@ -80,6 +81,11 @@ class SourceMatcher {
   /// [autoResolveSweepBudget], overridable so a test can spend it on purpose
   /// instead of waiting thirty seconds for the behaviour it exists to bound.
   final Duration sweepBudget;
+
+  /// Production uses the repository's short-TTL search cache (and its in-flight
+  /// dedupe) so repeated episode taps don't re-search hundreds of sources.
+  /// Off by default so test fakes that only implement `search` stay valid.
+  final bool useSearchCache;
   final MatchStore _store;
   final ZSourcePrefs _prefs;
   final List<({String id, String name})> Function(ZKind) _candidates;
@@ -159,7 +165,16 @@ class SourceMatcher {
     Future<List<MediaItem>?> searchFor(String q) async {
       if (abandoned?.call() ?? false) return null;
       try {
-        final results = await _sources.search(q, sourceId: sourceId);
+        // Cross-source search fan-out already has a 3-minute cache and an
+        // in-flight dedupe; Auto Find used to bypass both, so every episode
+        // tap paid for hundreds of identical searches again.
+        final results = useSearchCache
+            ? (await _sources.searchStatus(
+                q,
+                sourceId: sourceId,
+                cache: true,
+              )).items
+            : await _sources.search(q, sourceId: sourceId);
         if (abandoned?.call() ?? false) {
           // This used to be invisible: the HTTP round-trip had already
           // succeeded, the answers were in hand, and they were dropped without

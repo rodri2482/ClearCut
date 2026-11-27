@@ -37,11 +37,13 @@ const frameXtvSourceId = 'clearcut_framextv';
 /// provider with `mihon:` routes its data calls to the native Mihon bridge,
 /// which has no such extension installed. This set is the explicit exception.
 const webtoonSourceId = 'clearcut_webtoon';
+const plexSourceId = 'clearcut_plex';
 const bundledMangaSourceIds = {webtoonSourceId};
 
 const bundledSources = [
   BundledSource(frameXtvSourceId, 'framextv.js', 'FrameXTV'),
   BundledSource(webtoonSourceId, 'webtoon.js', 'WEBTOON'),
+  BundledSource(plexSourceId, 'plex.js', 'Plex Watch'),
 ];
 
 /// Ids of every source shipped inside the APK. Used by the resolver to make

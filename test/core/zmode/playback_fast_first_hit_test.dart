@@ -149,8 +149,11 @@ void main() {
     final events = <ProgressiveResolve>[];
     final sub = resolver.resolveProgressive(_ep2).listen(events.add);
     try {
-      // Long enough for src-b to resolve, far shorter than src-a's budget.
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      // Long enough for src-b to resolve even when the suite runs several
+      // isolates at once, far shorter than src-a's 5s budget. 150ms was
+      // enough on an idle machine and flaked under load — this is a timing
+      // guard for the test, not a longer allowance for the product.
+      await Future<void>.delayed(const Duration(milliseconds: 600));
       expect(
         events,
         isNotEmpty,

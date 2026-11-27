@@ -395,6 +395,12 @@ class StremioProvider implements BaseProvider {
     return _episodes(ref, meta);
   }
 
+  /// FrameXTV-style connection bound: its server fan-out is capped at 4.2s so
+  /// one dead mirror cannot hold a title hostage. Stremio used to await EVERY
+  /// installed addon with no bound, then hand back every advertised link —
+  /// including links nobody had checked would play.
+  static const Duration _connectBudget = Duration(seconds: 5);
+
   @override
   Future<List<VideoSource>> getVideoSources(
     String episodeUrl, {
@@ -421,7 +427,14 @@ class StremioProvider implements BaseProvider {
     }
     final session = manager.openLinks(ref);
     try {
-      await session.done;
+      // One addon hanging used to hold the whole Play sweep for 25s+. Bound
+      // the connection exactly the way FrameXTV bounds its server list, then
+      // use whatever answered in time — addons still resolving after this are
+      // discarded rather than making the viewer wait.
+      await session.done.timeout(
+        _connectBudget,
+        onTimeout: () {},
+      );
       final sources = <VideoSource>[];
       final seen = <String>{};
       for (final group in session.currentGroups) {
@@ -438,6 +451,10 @@ class StremioProvider implements BaseProvider {
           }
         }
       }
+      if (sources.isEmpty) return const [];
+      // Verification belongs to PlaybackResolver's injected StreamProbe (the
+      // same bounded first-hit probe FrameXTV's links go through). Doing it
+      // here would probe twice and bypass test fakes.
       return sources;
     } finally {
       session.dispose();

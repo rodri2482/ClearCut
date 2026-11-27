@@ -311,11 +311,10 @@ class _DetailScreenTvState extends State<DetailScreenTv> {
       }
     }
     if (!mounted) return;
+    // The Stremio links sheet used to run before TV Play and hand a picked
+    // link here as a seed. Play now uses the verified resolver, so no seed is
+    // needed; the sheet remains reachable from the Sources/streams picker.
     VideoSource? seed;
-    if (usesStremioLinks(widget.item.sourceId)) {
-      seed = await _pickStremioSource(episodes, index, detail);
-      if (!mounted || seed == null) return;
-    }
     // Same as the phone screen: name the source that stops short of this
     // episode and let the viewer choose the sweep rather than imposing it
     // (see [Episode.unavailable]). Re-applied on top of the TV rewrite.

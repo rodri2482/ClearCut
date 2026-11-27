@@ -1515,19 +1515,12 @@ class _DetailViewState extends State<_DetailView>
       }
     }
     if (!mounted) return;
-    if (usesStremioLinks(widget.item.sourceId, initialSource: initialSource)) {
-      final picked = await _pickStremioSource(episodes, index, detail);
-      if (!mounted || picked == null) return;
-      await _openPlayer(
-        episodes,
-        index,
-        detail,
-        category,
-        playerOverride: playerOverride,
-        initialSource: picked,
-      );
-      return;
-    }
+    // Stremio titles used to short-circuit Play straight into the grouped
+    // links sheet, which lists addon links without probing any of them. That
+    // read as "Auto Find doesn't search, it just recommends Stremio". Play now
+    // goes through the normal resolver like every other source: Stremio is a
+    // candidate in the same sweep and its HTTP links are verified before a hit
+    // is reported. The links sheet is still reachable from the Sources button.
     // Only another app needs a link choice before launch; both in-app players
     // keep their automatic launch.
     final playerPackage =

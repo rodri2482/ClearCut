@@ -125,7 +125,7 @@ class _StremioLinksSheetState extends State<_StremioLinksSheet> {
   bool get _allowTorrent =>
       Platform.isAndroid && !(sl.isRegistered<AppMode>() && sl<AppMode>().isTv);
 
-  void _choose(StremioLinkChoice choice) {
+  Future<void> _choose(StremioLinkChoice choice) async {
     if (_picked || _dismissed) return;
     if (_session?.isCurrent(choice) != true) {
       setState(_start);

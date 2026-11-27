@@ -68,6 +68,7 @@ import '../repository/catalogue_repository.dart';
 import '../repository/host_mirrors.dart';
 import '../repository/provider_settings_repository.dart';
 import '../repository/source_domain_overrides.dart';
+import '../stremio/stremio_ref.dart';
 import '../stremio/stremio_manager.dart';
 import '../stremio/stremio_home_cache.dart';
 import '../stremio/stremio_backup.dart';
@@ -1172,6 +1173,16 @@ Future<void> initDependencies({bool Function()? isOffline}) async {
   await stremioManager.init();
   await stremioManager.ensureDefaultMetadata();
   sl.registerSingleton<StremioManager>(stremioManager);
+  // Stremio is a PSEUDO source: one id backed by addons, so it never appears
+  // in ProviderManager.installedIds or any extension manager. Without this
+  // reapply, a saved Stremio pick was reported "not yet valid" on every boot
+  // and silently fell back to allanime — which is why addons looked unreachable.
+  if (sl.isRegistered<ActiveSourceCubit>()) {
+    final changed = sl<ActiveSourceCubit>().reapplySaved(
+      (id) => id == stremioSourceId && stremioManager.enabled.isNotEmpty,
+    );
+    if (changed && sl.isRegistered<HomeCubit>()) sl<HomeCubit>().load();
+  }
   final stremioRemote = StremioRemote(
     endpoint: endpoint,
     accessToken: cloudAccessToken,

@@ -50,6 +50,7 @@ void main() {
     required SourceMatcher matcher,
     String? preferred,
     Duration? budget,
+    Duration? sweepBudget,
     List<({String id, String name})>? candidates,
   }) {
     if (preferred != null) prefs.set(show.kind, preferred);
@@ -63,6 +64,7 @@ void main() {
       candidates: (_) =>
           candidates ?? [(id: 'src-a', name: 'A'), (id: 'src-b', name: 'B')],
       perSourceBudget: budget,
+      sweepBudget: sweepBudget ?? const Duration(seconds: 30),
       scores: scores,
     );
     r.bindTitleLookup((_) async => (title: 'FMA', alt: null, malId: 100));
@@ -353,7 +355,7 @@ void main() {
       expect(events[1].streams.length, 5);
       expect(events.last.done, isTrue);
       // The done event carries the union in candidate order, not the last
-      // hit alone — the binding constraint with the full resolve.
+      // hit alone â€” the binding constraint with the full resolve.
       expect(events.last.streams.map((s) => s.url).toList(), [
         'https://a/s1',
         'https://a/s2',
@@ -371,7 +373,7 @@ void main() {
 
     test('replays the cached winner immediately without re-sweeping', () async {
       // First play populates the winner cache; the replay must answer from
-      // it — one immediate done event on the winner's streams, no sweep.
+      // it â€” one immediate done event on the winner's streams, no sweep.
       final src = _ProgSrc.fastSlow(
         bSourcesDelay: const Duration(milliseconds: 300),
       );
@@ -510,7 +512,7 @@ void main() {
 
     test('slow pinned miss is never substituted by a fast hit', () async {
       // The pin verdict gates the wave: src-b answers in 50ms but is not
-      // even asked until the pinned src-a (300ms miss) answers — so no
+      // even asked until the pinned src-a (300ms miss) answers â€” so no
       // non-pinned hit can slip out first, and the stream ends with the
       // verdict and zero events.
       final src = _ProgSrc.fastSlow(
@@ -572,6 +574,32 @@ void main() {
       expect(error, isA<PlaybackAborted>());
     });
   });
+  // The Play path deliberately walks the full eligible list, so only a
+  // wall-clock budget can stop 25s timeouts from turning into minutes of
+  // "Finding sourcesâ€¦". Once spent, no NEW candidates are started; whatever
+  // is already in flight still gets to answer.
+  test('a progressive sweep stops starting candidates at its budget', () async {
+    final src = _ProgSrc.fastSlow();
+    final candidates = [
+      for (var i = 0; i < 40; i++) (id: 'miss-$i', name: 'Miss $i'),
+    ];
+    final r = resolver(
+      sources: src,
+      matcher: matcherFor(src),
+      candidates: candidates,
+      sweepBudget: const Duration(milliseconds: 30),
+    );
+    Object? error;
+    try {
+      await r.resolveProgressive(ep2).toList();
+    } catch (e) {
+      error = e;
+    }
+    expect(error, isNotNull, reason: 'nothing in the list has the episode');
+    final asked = src.log.where((l) => l.startsWith('search:')).length;
+    expect(asked, lessThan(candidates.length),
+        reason: 'the budget cut the walk short instead of asking all 40');
+  });
 }
 
 /// Same construction pattern as playback_resolver_test.dart's _SweepSrc:
@@ -596,7 +624,7 @@ class _ProgSrc implements SourceRepository {
   final List<Episode> aEps;
   final List<Episode> bEps;
 
-  /// When false, src-a lists only ep 1 — the pinned-failure case.
+  /// When false, src-a lists only ep 1 â€” the pinned-failure case.
   final bool aHasEp2;
 
   /// Stream-fetch latency per source (the candidate-order test slows src-a
@@ -713,4 +741,5 @@ class _ProgSrc implements SourceRepository {
     }
     return const [];
   }
+
 }

@@ -196,6 +196,10 @@ class PlaybackResolver {
     /// Checks stream links before a source is accepted. Tests pass a fake.
     StreamProbe? probe,
 
+    /// Wall-clock bound on the whole progressive sweep. Tests shorten it so
+    /// "stops starting new sources" is observable in milliseconds.
+    Duration sweepBudget = playbackSweepBudget,
+
     /// Remembers the winning source and links per episode across restarts.
     /// Optional, like [scores]: tests build this resolver without one.
     EpisodeAnchorStore? anchors,
@@ -211,10 +215,14 @@ class PlaybackResolver {
        _health = health,
        _candidates = candidates,
        _scores = scores,
-       _anchors = anchors;
+       _anchors = anchors,
+       sweepBudget = sweepBudget;
 
   final StreamProbe _probe;
   final SourceMatcher _matcher;
+
+  /// [playbackSweepBudget], overridable so tests can spend it on purpose.
+  final Duration sweepBudget;
   final SourceRepository _sources;
   final MatchStore _store;
   final ZSourcePrefs _prefs;
@@ -354,6 +362,16 @@ class PlaybackResolver {
   /// still true, a 25s wait would still be 25 frozen seconds, so the tight
   /// budget stands.
   static const Duration chosenSourceBudget = Duration(seconds: 25);
+
+  /// Wall-clock bound on a WHOLE Auto Find sweep, not on one source.
+  ///
+  /// The Play path walks the full eligible list (no count cap), eight sources
+  /// at a time, and each has a 25s budget. On a library with hundreds of
+  /// sources that is minutes of "Finding sources…" followed by nothing —
+  /// measured on a real phone, with sources timing out in a queue behind the
+  /// ones already running. Stop STARTING new work at this deadline; anything
+  /// already in flight still finishes, and a genuine hit still wins.
+  static const Duration playbackSweepBudget = Duration(seconds: 30);
 
   /// How long Auto Find waits for a source the viewer ranked HIGHER that has
   /// already resolved its episode list, once a lower-ranked source has a
@@ -598,6 +616,13 @@ class PlaybackResolver {
     // taken after one reads whatever an abort already set, so the sweep it
     // was meant to stop never sees a change.
     final gen = _sweepGen;
+    // One clock for the whole sweep: per-source budgets bound a single call,
+    // but only this bounds the walk across hundreds of sources. See
+    // [playbackSweepBudget].
+    final sweepStarted = DateTime.now();
+    bool sweepBudgetSpent() =>
+        DateTime.now().difference(sweepStarted) >= sweepBudget;
+    var budgetLogged = false;
     // Derived ONCE per sweep, not per candidate — same reason as [_resolve].
     final abortFuture = _abortSignal.future.then<_Attempt?>((_) => null);
     final p = ZmodeIds.parseEpisode(zmEpisodeUrl);
@@ -857,8 +882,20 @@ class PlaybackResolver {
         for (var i = 0; i < queue.length; i++) queue[i]: i,
       };
       var next = 0;
+      void noteBudget() {
+        if (budgetLogged) return;
+        budgetLogged = true;
+        debugPrint(
+          '[playback] resolveProgressive · sweep budget spent after asking '
+          '${next + pending.length} of ${queue.length} sources',
+        );
+      }
       void fill() {
         while (pending.length < 8 && next < queue.length && gen == _sweepGen) {
+          if (sweepBudgetSpent()) {
+            noteBudget();
+            return;
+          }
           final id = queue[next++];
           pending[id] = ask(id);
         }
@@ -888,6 +925,10 @@ class PlaybackResolver {
         // different contract from a TV sweep that wants to show what it found.
         final rest = queue.sublist(next);
         for (final wave in _candidateWaves(rest)) {
+          if (sweepBudgetSpent()) {
+            noteBudget();
+            return;
+          }
           if (gen != _sweepGen) throw const PlaybackAborted();
           final wavePending = <String, Future<_Attempt?>>{
             for (final id in wave) id: ask(id),

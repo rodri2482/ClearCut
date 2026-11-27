@@ -200,6 +200,10 @@ class PlaybackResolver {
     /// "stops starting new sources" is observable in milliseconds.
     Duration sweepBudget = playbackSweepBudget,
 
+    /// Whole-pass cap on stream verification. Tests shorten it so dead-link
+    /// behaviour is observable without waiting on real network timeouts.
+    Duration verificationBudget = streamVerificationBudget,
+
     /// Remembers the winning source and links per episode across restarts.
     /// Optional, like [scores]: tests build this resolver without one.
     EpisodeAnchorStore? anchors,
@@ -216,13 +220,17 @@ class PlaybackResolver {
        _candidates = candidates,
        _scores = scores,
        _anchors = anchors,
-       sweepBudget = sweepBudget;
+       sweepBudget = sweepBudget,
+       verificationBudget = verificationBudget;
 
   final StreamProbe _probe;
   final SourceMatcher _matcher;
 
   /// [playbackSweepBudget], overridable so tests can spend it on purpose.
   final Duration sweepBudget;
+
+  /// [streamVerificationBudget], overridable in tests.
+  final Duration verificationBudget;
   final SourceRepository _sources;
   final MatchStore _store;
   final ZSourcePrefs _prefs;
@@ -301,6 +309,12 @@ class PlaybackResolver {
   /// sweep would. Anything that has not answered like video by then is
   /// dropped — the sweep takes over rather than gambling on an unchecked link.
   static const Duration anchorProbeBudget = Duration(milliseconds: 2500);
+
+  /// Whole-pass cap on proving a candidate's links actually play. Without it
+  /// a source that returns 16 dead URLs could occupy the verification lane for
+  /// the full per-link timeout on every one. Links still unanswered at the cap
+  /// are dropped, never passed to the player unchecked.
+  static const Duration streamVerificationBudget = Duration(seconds: 5);
 
   /// In-flight resolves keyed by metadata episode url.
   final Map<String, Future<ResolvedPlayback>> _inFlight = {};
@@ -1654,6 +1668,7 @@ class PlaybackResolver {
       );
       final live = await _probe.liveStreams(
         fresh,
+        budget: fast ? verificationBudget : null,
         firstHitGrace: fast ? fastFirstHitGrace : null,
       );
       if (live.isNotEmpty) return enrichStreams(live);
@@ -2404,7 +2419,9 @@ class PlaybackResolver {
     // dead links.
     final live = await _probe.liveStreams(
       streams,
-      // Playback starts on the first confirmed link; late mirrors still
+      // Playback is bounded so one dead source can't stall the sweep;
+      // downloads keep the full window so no mirror is missed.
+      budget: fast ? verificationBudget : null,
       // arrive through progressive events and polling. A download passes
       // fast:false and keeps the full window so no mirror is missed.
       firstHitGrace: fast ? fastFirstHitGrace : null,

@@ -163,6 +163,30 @@ void main() {
     await settle();
   });
 
+  test('a per-call wait ceiling overrides the lane default', () async {
+    // Search calls ask for a shorter wait than stream resolution. If the
+    // override were ignored, this would sit for the lane's 1s default.
+    final hold = Completer<void>();
+    s.enqueue('s', 'hold', () async {
+      await hold.future;
+      return 'hold';
+    }, lane: CallLane.interactive);
+    await settle();
+
+    final started = DateTime.now();
+    final short = s.enqueue(
+      's',
+      'search',
+      () async => 'search',
+      lane: CallLane.background,
+      waitCeiling: const Duration(milliseconds: 250),
+    );
+    await expectLater(short, throwsA(isA<ProviderCallQueueTimeout>()));
+    expect(DateTime.now().difference(started).inMilliseconds, lessThan(700));
+    hold.complete();
+    await settle();
+  });
+
   test('a failure releases the lane for the next caller', () async {
     final f1 = s.enqueue('s', 'boom', () async => throw StateError('boom'));
     final f2 = s.enqueue('s', 'after', () async => 'after');

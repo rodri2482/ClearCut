@@ -125,6 +125,7 @@ class JsCallScheduler {
     Future<T> Function() action, {
     CallLane lane = CallLane.interactive,
     bool Function()? abandoned,
+    Duration? waitCeiling,
   }) {
     final done = Completer<T>();
     // The zone answer is folded in HERE, not left to each caller, so a call
@@ -140,6 +141,13 @@ class JsCallScheduler {
       done: done,
       lane: lane,
       enqueuedAt: DateTime.now(),
+      // A search gets a shorter wait than a stream resolve: it is the call
+      // that fans out across every source, and a 25s queue stall there is
+      // what made Auto Find take minutes. Null keeps the lane's own ceiling.
+      ceiling: waitCeiling ??
+          (lane == CallLane.background
+              ? backgroundWaitCeiling
+              : interactiveWaitCeiling),
       abandoned: () =>
           (abandoned?.call() ?? false) || (isAbandoned?.call() ?? false),
     );
@@ -148,9 +156,7 @@ class JsCallScheduler {
     // with a 30s call, and a deadline that only gets examined when the pump
     // next advances would overshoot by exactly that 30s — the hang it exists
     // to prevent. The entry drops itself out of the queue when it fires.
-    final ceiling = lane == CallLane.background
-        ? backgroundWaitCeiling
-        : interactiveWaitCeiling;
+    final ceiling = entry.ceiling;
     entry.deadline = Timer(ceiling, () => _expire(entry, ceiling));
     _drain();
     return done.future;
@@ -194,14 +200,14 @@ class JsCallScheduler {
     for (final q in [_interactive, _background]) {
       while (q.isNotEmpty) {
         final e = q.first;
-        final ceiling = e.lane == CallLane.background
-            ? backgroundWaitCeiling
-            : interactiveWaitCeiling;
-        if (now.difference(e.enqueuedAt) < ceiling) break;
-        q.removeFirst();
-        e.deadline?.cancel();
-        e.fail(ProviderCallQueueTimeout(
-            e.sourceId, e.method, now.difference(e.enqueuedAt)));
+        if (now.difference(e.enqueuedAt) >= e.ceiling) {
+          q.removeFirst();
+          e.deadline?.cancel();
+          e.fail(ProviderCallQueueTimeout(
+              e.sourceId, e.method, now.difference(e.enqueuedAt)));
+          continue;
+        }
+        break;
       }
     }
 
@@ -247,6 +253,7 @@ class _Entry<T> {
     required this.done,
     required this.lane,
     required this.enqueuedAt,
+    required this.ceiling,
     this.abandoned,
   });
 
@@ -256,6 +263,9 @@ class _Entry<T> {
   final Completer<T> done;
   final CallLane lane;
   final DateTime enqueuedAt;
+
+  /// Per-entry wait ceiling. Shorter for search than for stream resolution.
+  final Duration ceiling;
   final bool Function()? abandoned;
   Timer? deadline;
 

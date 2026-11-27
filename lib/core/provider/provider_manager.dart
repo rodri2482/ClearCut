@@ -282,7 +282,12 @@ class _JsHost {
     List<Object?> args, {
     Duration timeout = const Duration(seconds: 15),
     bool Function()? abandoned,
+
+    /// Whole-call ceiling (queue wait + execution). Only `search` overrides
+    /// this; stream resolution and downloads keep [maxProviderCallTimeout].
+    Duration? callTimeout,
   }) async {
+    var gaveUp = false;
     try {
       final v = await _scheduler
           .enqueue<String>(
@@ -290,7 +295,8 @@ class _JsHost {
             method,
             () => _runCall(sourceId, method, args, timeout),
             lane: _laneNow(),
-            abandoned: abandoned,
+            abandoned: () => gaveUp || (abandoned?.call() ?? false),
+            waitCeiling: callTimeout,
           )
           // One call owns the shared engine, so a call that overruns holds
           // every other source hostage. `maxProviderFetchTimeoutMs` bounds a
@@ -299,7 +305,12 @@ class _JsHost {
           // `fuckingfast.net` download ran 30306ms and 82 calls queued behind
           // it, each then burning the full queue wait). Bound the whole call
           // so one slow site costs its own search and nothing else.
-          .timeout(maxProviderCallTimeout);
+          .timeout(callTimeout ?? maxProviderCallTimeout, onTimeout: () {
+            // A finished call that only just made it to the front must not be
+            // started by the pump after the caller has already given up.
+            gaveUp = true;
+            throw TimeoutException('$method gave up after ${callTimeout ?? maxProviderCallTimeout}');
+          });
       _health.remove(sourceId);
       return v;
     } on ProviderCallAbandoned {
@@ -923,12 +934,14 @@ class JsProvider implements BaseProvider, ReadingProvider {
     List<Object?> args, {
     Duration timeout = const Duration(seconds: 15),
     bool Function()? abandoned,
+    Duration? callTimeout,
   }) => _host.call(
     sourceId,
     method,
     args,
     timeout: timeout,
     abandoned: abandoned,
+    callTimeout: callTimeout,
   );
 
   ProviderInfo? _infoCache;
@@ -1072,11 +1085,21 @@ class JsProvider implements BaseProvider, ReadingProvider {
     int page, {
     String category = '',
   }) async {
-    final raw = await _call('search', [
-      query,
-      page,
-      {'category': category},
-    ]);
+    final raw = await _call(
+      'search',
+      [
+        query,
+        page,
+        {'category': category},
+      ],
+      // Auto Find fans a query across hundreds of sources. The old shared
+      // 25s ceiling let one queued search hold the whole JS lane that long;
+      // 12s wait / 10s execution frees it early while still covering the
+      // slow-but-real sources measured on device (~11s). Stream resolution
+      // keeps its full budget.
+      timeout: const Duration(seconds: 10),
+      callTimeout: const Duration(seconds: 12),
+    );
     final list = (await _decodeBig(raw) as List)
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();

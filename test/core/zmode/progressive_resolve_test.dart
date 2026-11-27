@@ -581,13 +581,13 @@ void main() {
   test('a progressive sweep stops starting candidates at its budget', () async {
     final src = _ProgSrc.fastSlow();
     final candidates = [
-      for (var i = 0; i < 40; i++) (id: 'miss-$i', name: 'Miss $i'),
+      for (var i = 0; i < 200; i++) (id: 'miss-$i', name: 'Miss $i'),
     ];
     final r = resolver(
       sources: src,
       matcher: matcherFor(src),
       candidates: candidates,
-      sweepBudget: const Duration(milliseconds: 30),
+      sweepBudget: const Duration(milliseconds: 5),
     );
     Object? error;
     try {
@@ -598,7 +598,7 @@ void main() {
     expect(error, isNotNull, reason: 'nothing in the list has the episode');
     final asked = src.log.where((l) => l.startsWith('search:')).length;
     expect(asked, lessThan(candidates.length),
-        reason: 'the budget cut the walk short instead of asking all 40');
+        reason: 'the budget cut the walk short instead of asking all 200');
   });
 }
 
